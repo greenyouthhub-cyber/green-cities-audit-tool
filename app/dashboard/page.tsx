@@ -106,6 +106,31 @@ function safeLabel(value: string | null | undefined, fallback = 'Unknown') {
   return trimmed ? trimmed : fallback;
 }
 
+function normalizeAgeGroup(value: string | null | undefined) {
+  const v = safeLabel(value);
+
+  if (
+    v === 'Group 16–22' ||
+    v === 'Group 16-22' ||
+    v === '16–22' ||
+    v === '16-22'
+  ) {
+    return 'Group 16–22';
+  }
+
+  if (
+    v === 'Group 23-30' ||
+    v === 'Group 23–30' ||
+    v === '23-30' ||
+    v === '23–30'
+  ) {
+    return 'Group 23-30';
+  }
+
+  return v;
+}
+
+
 function formatDateLabel(dateString: string | null | undefined) {
   if (!dateString) return 'Unknown';
   const d = new Date(dateString);
@@ -446,34 +471,45 @@ export default function DashboardPage() {
   }, [filteredBlockResponses]);
 
   const ageBandComparison = useMemo(() => {
-    const data = averageByArea.map((row) => ({
-      area: row.area,
-      [AGE_16_22]: 0,
-      [AGE_23_30]: 0,
-    }));
+  const data = averageByArea.map((row) => ({
+    area: row.area,
+    [AGE_16_22]: 0,
+    [AGE_23_30]: 0,
+  }));
 
-    const areaIndex = new Map(data.map((d, idx) => [d.area, idx]));
-    const grouped: Record<string, Record<string, number[]>> = {};
+  const areaIndex = new Map(
+    data.map((d, idx) => [d.area, idx] as const)
+  );
 
-    filteredBlockResponses.forEach((row) => {
-      if (typeof row.block_score !== 'number') return;
-      const age = safeLabel(row.age_group);
-      const area = safeLabel(row.block_name);
-      if (!grouped[age]) grouped[age] = {};
-      if (!grouped[age][area]) grouped[age][area] = [];
-      grouped[age][area].push(row.block_score);
+  const grouped: Record<string, Record<string, number[]>> = {};
+
+  filteredBlockResponses.forEach((row) => {
+    if (typeof row.block_score !== 'number') return;
+
+    const age = normalizeAgeGroup(row.age_group);
+    const area = safeLabel(row.block_name);
+
+    if (age !== AGE_16_22 && age !== AGE_23_30) return;
+
+    if (!grouped[age]) grouped[age] = {};
+    if (!grouped[age][area]) grouped[age][area] = [];
+    grouped[age][area].push(row.block_score);
+  });
+
+  Object.entries(grouped).forEach(([age, areas]) => {
+    Object.entries(areas).forEach(([area, scores]) => {
+      const idx = areaIndex.get(area);
+      if (idx === undefined) return;
+
+      data[idx] = {
+        ...data[idx],
+        [age]: average(scores),
+      };
     });
+  });
 
-    Object.entries(grouped).forEach(([age, areas]) => {
-      Object.entries(areas).forEach(([area, scores]) => {
-        const idx = areaIndex.get(area);
-        if (idx === undefined) return;
-        (data[idx] as any)[age] = average(scores);
-      });
-    });
-
-    return data;
-  }, [averageByArea, filteredBlockResponses]);
+  return data;
+}, [averageByArea, filteredBlockResponses]);
 
   const areaChartData = useMemo(() => averageByArea.map((row) => ({ area: row.area, avg: row.avg, count: row.count })), [averageByArea]);
   const countryChartData = useMemo(() => responsesByCountry.map((row) => ({ country: row.label, count: row.count })), [responsesByCountry]);
