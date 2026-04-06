@@ -130,7 +130,6 @@ function normalizeAgeGroup(value: string | null | undefined) {
   return v;
 }
 
-
 function formatDateLabel(dateString: string | null | undefined) {
   if (!dateString) return 'Unknown';
   const d = new Date(dateString);
@@ -323,9 +322,11 @@ export default function DashboardPage() {
         setError(null);
 
         const submissionsRes = await supabase
-  .from('submissions')
-  .select('id, city, country, age_group, overall_score, overall_result, created_at')
-  .order('created_at', { ascending: false });
+          .from('submissions')
+          .select('id, city, country, age_group, overall_score, overall_result, created_at')
+          .order('created_at', { ascending: false });
+
+        if (submissionsRes.error) throw submissionsRes.error;
 
         const blocksRes = await supabase
           .from('block_responses')
@@ -336,18 +337,18 @@ export default function DashboardPage() {
         setSubmissions((submissionsRes.data || []) as SubmissionRow[]);
         setBlockResponses((blocksRes.data || []) as BlockResponseRow[]);
       } catch (err: any) {
-  console.error('DASHBOARD LOAD ERROR FULL:', JSON.stringify(err, null, 2));
-  console.error('DASHBOARD LOAD ERROR RAW:', err);
-  const message =
-    err?.message ||
-    err?.error_description ||
-    err?.details ||
-    JSON.stringify(err) ||
-    'Unexpected error loading dashboard';
-  setError(message);
-} finally {
-  setLoading(false);
-}
+        console.error('DASHBOARD LOAD ERROR FULL:', JSON.stringify(err, null, 2));
+        console.error('DASHBOARD LOAD ERROR RAW:', err);
+        const message =
+          err?.message ||
+          err?.error_description ||
+          err?.details ||
+          JSON.stringify(err) ||
+          'Unexpected error loading dashboard';
+        setError(message);
+      } finally {
+        setLoading(false);
+      }
     }
 
     loadData();
@@ -364,15 +365,16 @@ export default function DashboardPage() {
   );
 
   const ageGroups = useMemo(
-    () => ['All', ...sortRows([...new Set(submissions.map((s) => safeLabel(s.age_group)).filter(Boolean))], (v) => v, 'asc')],
+    () => ['All', ...sortRows([...new Set(submissions.map((s) => normalizeAgeGroup(s.age_group)).filter(Boolean))], (v) => v, 'asc')],
     [submissions]
   );
 
   const filteredSubmissions = useMemo(() => {
     return submissions.filter((s) => {
+      const normalizedAge = normalizeAgeGroup(s.age_group);
       const matchesCountry = countryFilter === 'All' || safeLabel(s.country) === countryFilter;
       const matchesCity = cityFilter === 'All' || safeLabel(s.city) === cityFilter;
-      const matchesAge = ageFilter === 'All' || safeLabel(s.age_group) === ageFilter;
+      const matchesAge = ageFilter === 'All' || normalizedAge === ageFilter;
       return matchesCountry && matchesCity && matchesAge;
     });
   }, [submissions, countryFilter, cityFilter, ageFilter]);
@@ -380,13 +382,20 @@ export default function DashboardPage() {
   const filteredSubmissionIds = useMemo(() => new Set(filteredSubmissions.map((s) => s.id)), [filteredSubmissions]);
 
   const filteredBlockResponses = useMemo(() => {
-    return blockResponses.filter((b) => filteredSubmissionIds.has(b.submission_id));
-  }, [blockResponses, filteredSubmissionIds]);
+    return blockResponses.filter((b) => {
+      if (!filteredSubmissionIds.has(b.submission_id)) return false;
+      const normalizedAge = normalizeAgeGroup(b.age_group);
+      const matchesCountry = countryFilter === 'All' || safeLabel(b.country) === countryFilter;
+      const matchesCity = cityFilter === 'All' || safeLabel(b.city) === cityFilter;
+      const matchesAge = ageFilter === 'All' || normalizedAge === ageFilter;
+      return matchesCountry && matchesCity && matchesAge;
+    });
+  }, [blockResponses, filteredSubmissionIds, countryFilter, cityFilter, ageFilter]);
 
   const totalResponses = filteredSubmissions.length;
   const countriesRepresented = useMemo(() => new Set(filteredSubmissions.map((s) => safeLabel(s.country))).size, [filteredSubmissions]);
   const citiesRepresented = useMemo(() => new Set(filteredSubmissions.map((s) => safeLabel(s.city))).size, [filteredSubmissions]);
-  const ageRepresented = useMemo(() => new Set(filteredSubmissions.map((s) => safeLabel(s.age_group))).size, [filteredSubmissions]);
+  const ageRepresented = useMemo(() => new Set(filteredSubmissions.map((s) => normalizeAgeGroup(s.age_group))).size, [filteredSubmissions]);
 
   const averageOverallScore = useMemo(() => {
     return average(filteredSubmissions.map((s) => s.overall_score).filter((v): v is number => typeof v === 'number'));
@@ -401,7 +410,7 @@ export default function DashboardPage() {
   }, [filteredSubmissions]);
 
   const responsesByAge = useMemo<CountRow[]>(() => {
-    return groupCounts(filteredSubmissions.map((s) => safeLabel(s.age_group))).map((row) => ({ label: row.label, count: row.count }));
+    return groupCounts(filteredSubmissions.map((s) => normalizeAgeGroup(s.age_group))).map((row) => ({ label: row.label, count: row.count }));
   }, [filteredSubmissions]);
 
   const averageByArea = useMemo<AreaAverage[]>(() => {
@@ -458,7 +467,7 @@ export default function DashboardPage() {
     const grouped: Record<string, Record<string, number[]>> = {};
     filteredBlockResponses.forEach((row) => {
       if (typeof row.block_score !== 'number') return;
-      const group = safeLabel(row.age_group);
+      const group = normalizeAgeGroup(row.age_group);
       const area = safeLabel(row.block_name);
       if (!grouped[group]) grouped[group] = {};
       if (!grouped[group][area]) grouped[group][area] = [];
@@ -471,49 +480,60 @@ export default function DashboardPage() {
   }, [filteredBlockResponses]);
 
   const ageBandComparison = useMemo(() => {
-  const data = averageByArea.map((row) => ({
-    area: row.area,
-    [AGE_16_22]: 0,
-    [AGE_23_30]: 0,
-  }));
+    const data = averageByArea.map((row) => ({
+      area: row.area,
+      [AGE_16_22]: 0,
+      [AGE_23_30]: 0,
+    }));
 
-  const areaIndex = new Map(
-    data.map((d, idx) => [d.area, idx] as const)
+    const areaIndex = new Map(
+      data.map((d, idx) => [d.area, idx] as const)
+    );
+
+    const grouped: Record<string, Record<string, number[]>> = {};
+
+    filteredBlockResponses.forEach((row) => {
+      if (typeof row.block_score !== 'number') return;
+
+      const age = normalizeAgeGroup(row.age_group);
+      const area = safeLabel(row.block_name);
+
+      if (age !== AGE_16_22 && age !== AGE_23_30) return;
+
+      if (!grouped[age]) grouped[age] = {};
+      if (!grouped[age][area]) grouped[age][area] = [];
+      grouped[age][area].push(row.block_score);
+    });
+
+    Object.entries(grouped).forEach(([age, areas]) => {
+      Object.entries(areas).forEach(([area, scores]) => {
+        const idx = areaIndex.get(area);
+        if (idx === undefined) return;
+
+        data[idx] = {
+          ...data[idx],
+          [age]: average(scores),
+        };
+      });
+    });
+
+    return data;
+  }, [averageByArea, filteredBlockResponses]);
+
+  const areaChartData = useMemo(
+    () => averageByArea.map((row) => ({ area: row.area, avg: row.avg, count: row.count })),
+    [averageByArea]
   );
 
-  const grouped: Record<string, Record<string, number[]>> = {};
+  const countryChartData = useMemo(
+    () => responsesByCountry.map((row) => ({ country: row.label, count: row.count })),
+    [responsesByCountry]
+  );
 
-  filteredBlockResponses.forEach((row) => {
-    if (typeof row.block_score !== 'number') return;
-
-    const age = normalizeAgeGroup(row.age_group);
-    const area = safeLabel(row.block_name);
-
-    if (age !== AGE_16_22 && age !== AGE_23_30) return;
-
-    if (!grouped[age]) grouped[age] = {};
-    if (!grouped[age][area]) grouped[age][area] = [];
-    grouped[age][area].push(row.block_score);
-  });
-
-  Object.entries(grouped).forEach(([age, areas]) => {
-    Object.entries(areas).forEach(([area, scores]) => {
-      const idx = areaIndex.get(area);
-      if (idx === undefined) return;
-
-      data[idx] = {
-        ...data[idx],
-        [age]: average(scores),
-      };
-    });
-  });
-
-  return data;
-}, [averageByArea, filteredBlockResponses]);
-
-  const areaChartData = useMemo(() => averageByArea.map((row) => ({ area: row.area, avg: row.avg, count: row.count })), [averageByArea]);
-  const countryChartData = useMemo(() => responsesByCountry.map((row) => ({ country: row.label, count: row.count })), [responsesByCountry]);
-  const ageChartData = useMemo(() => responsesByAge.map((row) => ({ age: row.label, count: row.count })), [responsesByAge]);
+  const ageChartData = useMemo(
+    () => responsesByAge.map((row) => ({ age: row.label, count: row.count })),
+    [responsesByAge]
+  );
 
   const cityChartData = useMemo(() => {
     const grouped: Record<string, number[]> = {};
@@ -545,16 +565,15 @@ export default function DashboardPage() {
   }, [filteredSubmissions]);
 
   const mapCityData: {
-  city: string;
-  lat: number;
-  lng: number;
-  count: number;
-  avgScore: number;
-}[] = [];
+    city: string;
+    lat: number;
+    lng: number;
+    count: number;
+    avgScore: number;
+  }[] = [];
 
-const hasMapData = false;
+  const hasMapData = false;
 
-  
   const weakestIndicators = useMemo(() => {
     return averageByArea.slice(0, 10).map((row) => ({
       indicator: row.area,
@@ -590,35 +609,106 @@ const hasMapData = false;
   }, [weakestAreas]);
 
   const exportOverview = () => {
-    downloadCSV('dashboard-overview.csv', filteredSubmissions.map((s) => ({
-      id: s.id,
-      city: safeLabel(s.city),
-      country: safeLabel(s.country),
-      age_group: safeLabel(s.age_group),
-      overall_score: s.overall_score,
-      overall_result: safeLabel(s.overall_result),
-      created_at: s.created_at || '',
-    })));
+    downloadCSV(
+      'dashboard-overview.csv',
+      filteredSubmissions.map((s) => ({
+        id: s.id,
+        country: safeLabel(s.country),
+        city: safeLabel(s.city),
+        age_group: normalizeAgeGroup(s.age_group),
+        overall_score: s.overall_score,
+        overall_result: safeLabel(s.overall_result),
+        created_at: s.created_at || '',
+      }))
+    );
   };
 
   const exportAreas = () => {
-    downloadCSV('dashboard-area-averages.csv', averageByArea.map((row) => ({
-      area: row.area,
-      average_score: row.avg,
-      responses: row.count,
-    })));
+    downloadCSV(
+      'dashboard-area-averages.csv',
+      averageByArea.map((row) => ({
+        area: row.area,
+        average_score: row.avg,
+        responses: row.count,
+        score_band: scoreBand(row.avg),
+      }))
+    );
   };
 
   const exportRoadmap = () => {
-    downloadCSV('dashboard-roadmap-suggestions.csv', roadmapSuggestions.map((row) => ({
-      priority: row.priority,
-      area: row.area,
-      score: row.score,
-      score_band: row.scoreBand,
-      action_type: row.actionType,
-      suggested_action: row.suggestedAction,
-      actors: row.actors,
-    })));
+    const grouped: Record<string, number[]> = {};
+
+    blockResponses.forEach((row) => {
+      if (typeof row.block_score !== 'number') return;
+
+      const country = safeLabel(row.country);
+      const city = safeLabel(row.city);
+      const age_group = normalizeAgeGroup(row.age_group);
+      const area = safeLabel(row.block_name);
+
+      const key = `${country}|||${city}|||${age_group}|||${area}`;
+
+      if (!grouped[key]) grouped[key] = [];
+      grouped[key].push(row.block_score);
+    });
+
+    const roadmapRows = Object.entries(grouped).map(([key, scores]) => {
+      const [country, city, age_group, area] = key.split('|||');
+      const score = average(scores);
+
+      return {
+        country,
+        city,
+        age_group,
+        area,
+        score,
+        score_band: scoreBand(score),
+        action_type: inferRoadmapType(score),
+        suggested_action: inferAction(area),
+        actors: inferActors(area),
+      };
+    });
+
+    const byGroup: Record<string, typeof roadmapRows> = {};
+
+    roadmapRows.forEach((row) => {
+      const groupKey = `${row.country}|||${row.city}|||${row.age_group}`;
+      if (!byGroup[groupKey]) byGroup[groupKey] = [];
+      byGroup[groupKey].push(row);
+    });
+
+    const rankedRows: Array<{
+      priority_rank: number;
+      country: string;
+      city: string;
+      age_group: string;
+      area: string;
+      score: number;
+      score_band: string;
+      action_type: string;
+      suggested_action: string;
+      actors: string;
+    }> = [];
+
+    Object.values(byGroup).forEach((rows) => {
+      rows
+        .sort((a, b) => a.score - b.score)
+        .forEach((row, index) => {
+          rankedRows.push({
+            priority_rank: index + 1,
+            ...row,
+          });
+        });
+    });
+
+    rankedRows.sort((a, b) => {
+      if (a.country !== b.country) return a.country.localeCompare(b.country);
+      if (a.city !== b.city) return a.city.localeCompare(b.city);
+      if (a.age_group !== b.age_group) return a.age_group.localeCompare(b.age_group);
+      return a.priority_rank - b.priority_rank;
+    });
+
+    downloadCSV('dashboard-roadmap-all-cities-ranked.csv', rankedRows);
   };
 
   const resetFilters = () => {
@@ -666,44 +756,56 @@ const hasMapData = false;
           </div>
 
           <div className="flex flex-wrap gap-2">
-            <button onClick={exportOverview} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50">
+            <button
+              onClick={exportOverview}
+              className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50"
+            >
               <Download className="h-4 w-4" />
               Export overview
             </button>
-            <button onClick={exportAreas} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50">
+            <button
+              onClick={exportAreas}
+              className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50"
+            >
               <Download className="h-4 w-4" />
               Export areas
             </button>
-            <button onClick={exportRoadmap} className="inline-flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-medium text-emerald-800 shadow-sm hover:bg-emerald-100">
+            <button
+              onClick={exportRoadmap}
+              className="inline-flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-medium text-emerald-800 shadow-sm hover:bg-emerald-100"
+            >
               <Download className="h-4 w-4" />
-              Export roadmap
+              Export roadmap all cities
             </button>
           </div>
         </div>
 
         <Card>
           <CardHeader>
-  <div className="flex items-center justify-between gap-4">
-    <CardTitle>
-      <div className="flex items-center gap-2">
-        <Filter className="h-5 w-5 text-emerald-700" />
-        <span>Filters</span>
-      </div>
-    </CardTitle>
-
-    <button
-      onClick={resetFilters}
-      className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-50"
-    >
-      Reset
-    </button>
-  </div>
-</CardHeader>
+            <div className="flex items-center justify-between gap-4">
+              <CardTitle>
+                <div className="flex items-center gap-2">
+                  <Filter className="h-5 w-5 text-emerald-700" />
+                  <span>Filters</span>
+                </div>
+              </CardTitle>
+              <button
+                onClick={resetFilters}
+                className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-50"
+              >
+                Reset
+              </button>
+            </div>
+          </CardHeader>
           <CardContent>
             <div className="grid gap-4 md:grid-cols-3">
               <div>
                 <label className="mb-1 block text-sm font-medium text-slate-700">Country</label>
-                <select value={countryFilter} onChange={(e) => setCountryFilter(e.target.value)} className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm">
+                <select
+                  value={countryFilter}
+                  onChange={(e) => setCountryFilter(e.target.value)}
+                  className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm"
+                >
                   {countries.map((country) => (
                     <option key={country} value={country}>{country}</option>
                   ))}
@@ -711,7 +813,11 @@ const hasMapData = false;
               </div>
               <div>
                 <label className="mb-1 block text-sm font-medium text-slate-700">City</label>
-                <select value={cityFilter} onChange={(e) => setCityFilter(e.target.value)} className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm">
+                <select
+                  value={cityFilter}
+                  onChange={(e) => setCityFilter(e.target.value)}
+                  className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm"
+                >
                   {cities.map((city) => (
                     <option key={city} value={city}>{city}</option>
                   ))}
@@ -719,7 +825,11 @@ const hasMapData = false;
               </div>
               <div>
                 <label className="mb-1 block text-sm font-medium text-slate-700">Age group</label>
-                <select value={ageFilter} onChange={(e) => setAgeFilter(e.target.value)} className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm">
+                <select
+                  value={ageFilter}
+                  onChange={(e) => setAgeFilter(e.target.value)}
+                  className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm"
+                >
                   {ageGroups.map((age) => (
                     <option key={age} value={age}>{age}</option>
                   ))}
@@ -762,13 +872,13 @@ const hasMapData = false;
         <div className="grid gap-4 lg:grid-cols-2">
           <Card>
             <CardHeader>
-  <CardTitle>
-    <div className="flex items-center gap-2">
-      <AlertTriangle className="h-5 w-5 text-orange-600" />
-      <span>Top 3 weakest areas</span>
-    </div>
-  </CardTitle>
-</CardHeader>
+              <CardTitle>
+                <div className="flex items-center gap-2">
+                  <AlertTriangle className="h-5 w-5 text-orange-600" />
+                  <span>Top 3 weakest areas</span>
+                </div>
+              </CardTitle>
+            </CardHeader>
             <CardContent>
               <div className="space-y-3">
                 {weakestAreas.map((item, idx) => (
@@ -785,13 +895,13 @@ const hasMapData = false;
           </Card>
           <Card>
             <CardHeader>
-  <CardTitle>
-    <div className="flex items-center gap-2">
-      <Trophy className="h-5 w-5 text-emerald-700" />
-      <span>Top 3 strongest areas</span>
-    </div>
-  </CardTitle>
-</CardHeader>
+              <CardTitle>
+                <div className="flex items-center gap-2">
+                  <Trophy className="h-5 w-5 text-emerald-700" />
+                  <span>Top 3 strongest areas</span>
+                </div>
+              </CardTitle>
+            </CardHeader>
             <CardContent>
               <div className="space-y-3">
                 {strongestAreas.map((item, idx) => (
@@ -947,13 +1057,13 @@ const hasMapData = false;
         <div className="grid gap-4 xl:grid-cols-2">
           <Card>
             <CardHeader>
-  <CardTitle>
-    <div className="flex items-center gap-2">
-      <MapPinned className="h-5 w-5 text-emerald-700" />
-      <span>Map by cities</span>
-    </div>
-  </CardTitle>
-</CardHeader>
+              <CardTitle>
+                <div className="flex items-center gap-2">
+                  <MapPinned className="h-5 w-5 text-emerald-700" />
+                  <span>Map by cities</span>
+                </div>
+              </CardTitle>
+            </CardHeader>
             <CardContent>
               {hasMapData ? (
                 <BasicTable headers={['City', 'Lat', 'Lng', 'Responses', 'Avg score']} rows={mapCityData.map((row) => [row.city, row.lat, row.lng, row.count, row.avgScore])} />
@@ -966,13 +1076,13 @@ const hasMapData = false;
           </Card>
           <Card>
             <CardHeader>
-  <CardTitle>
-    <div className="flex items-center gap-2">
-      <CalendarRange className="h-5 w-5 text-emerald-700" />
-      <span>Timeline view</span>
-    </div>
-  </CardTitle>
-</CardHeader>
+              <CardTitle>
+                <div className="flex items-center gap-2">
+                  <CalendarRange className="h-5 w-5 text-emerald-700" />
+                  <span>Timeline view</span>
+                </div>
+              </CardTitle>
+            </CardHeader>
             <CardContent>
               <div className="h-[320px] w-full">
                 <ResponsiveContainer width="100%" height="100%">
@@ -1020,7 +1130,7 @@ const hasMapData = false;
         <Card>
           <CardHeader><CardTitle>Recent submissions</CardTitle></CardHeader>
           <CardContent>
-            <BasicTable headers={['Date', 'Country', 'City', 'Age', 'Overall score', 'Result']} rows={filteredSubmissions.slice(0, 20).map((s) => [formatDateLabel(s.created_at), safeLabel(s.country), safeLabel(s.city), safeLabel(s.age_group), typeof s.overall_score === 'number' ? s.overall_score : '-', safeLabel(s.overall_result)])} />
+            <BasicTable headers={['Date', 'Country', 'City', 'Age', 'Overall score', 'Result']} rows={filteredSubmissions.slice(0, 20).map((s) => [formatDateLabel(s.created_at), safeLabel(s.country), safeLabel(s.city), normalizeAgeGroup(s.age_group), typeof s.overall_score === 'number' ? s.overall_score : '-', safeLabel(s.overall_result)])} />
           </CardContent>
         </Card>
       </div>
