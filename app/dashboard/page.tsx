@@ -647,16 +647,22 @@ const hasMapData = false;
 
         <Card>
           <CardHeader>
-            <div className="flex items-center justify-between gap-4">
-              <CardTitle className="flex items-center gap-2">
-                <Filter className="h-5 w-5 text-emerald-700" />
-                Filters
-              </CardTitle>
-              <button onClick={resetFilters} className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-50">
-                Reset
-              </button>
-            </div>
-          </CardHeader>
+  <div className="flex items-center justify-between gap-4">
+    <CardTitle>
+      <div className="flex items-center gap-2">
+        <Filter className="h-5 w-5 text-emerald-700" />
+        <span>Filters</span>
+      </div>
+    </CardTitle>
+
+    <button
+      onClick={resetFilters}
+      className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-50"
+    >
+      Reset
+    </button>
+  </div>
+</CardHeader>
           <CardContent>
             <div className="grid gap-4 md:grid-cols-3">
               <div>
@@ -720,11 +726,13 @@ const hasMapData = false;
         <div className="grid gap-4 lg:grid-cols-2">
           <Card>
             <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <AlertTriangle className="h-5 w-5 text-orange-600" />
-                Top 3 weakest areas
-              </CardTitle>
-            </CardHeader>
+  <CardTitle>
+    <div className="flex items-center gap-2">
+      <AlertTriangle className="h-5 w-5 text-orange-600" />
+      <span>Top 3 weakest areas</span>
+    </div>
+  </CardTitle>
+</CardHeader>
             <CardContent>
               <div className="space-y-3">
                 {weakestAreas.map((item, idx) => (
@@ -741,11 +749,13 @@ const hasMapData = false;
           </Card>
           <Card>
             <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Trophy className="h-5 w-5 text-emerald-700" />
-                Top 3 strongest areas
-              </CardTitle>
-            </CardHeader>
+  <CardTitle>
+    <div className="flex items-center gap-2">
+      <Trophy className="h-5 w-5 text-emerald-700" />
+      <span>Top 3 strongest areas</span>
+    </div>
+  </CardTitle>
+</CardHeader>
             <CardContent>
               <div className="space-y-3">
                 {strongestAreas.map((item, idx) => (
@@ -901,11 +911,13 @@ const hasMapData = false;
         <div className="grid gap-4 xl:grid-cols-2">
           <Card>
             <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <MapPinned className="h-5 w-5 text-emerald-700" />
-                Map by cities
-              </CardTitle>
-            </CardHeader>
+  <CardTitle>
+    <div className="flex items-center gap-2">
+      <MapPinned className="h-5 w-5 text-emerald-700" />
+      <span>Map by cities</span>
+    </div>
+  </CardTitle>
+</CardHeader>
             <CardContent>
               {hasMapData ? (
                 <BasicTable headers={['City', 'Lat', 'Lng', 'Responses', 'Avg score']} rows={mapCityData.map((row) => [row.city, row.lat, row.lng, row.count, row.avgScore])} />
@@ -918,11 +930,13 @@ const hasMapData = false;
           </Card>
           <Card>
             <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <CalendarRange className="h-5 w-5 text-emerald-700" />
-                Timeline view
-              </CardTitle>
-            </CardHeader>
+  <CardTitle>
+    <div className="flex items-center gap-2">
+      <CalendarRange className="h-5 w-5 text-emerald-700" />
+      <span>Timeline view</span>
+    </div>
+  </CardTitle>
+</CardHeader>
             <CardContent>
               <div className="h-[320px] w-full">
                 <ResponsiveContainer width="100%" height="100%">
