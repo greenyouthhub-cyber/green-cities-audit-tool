@@ -3,15 +3,32 @@
 import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '@/lib/supabaseClient';
 import {
+  ResponsiveContainer,
   BarChart,
   Bar,
   XAxis,
   YAxis,
   CartesianGrid,
   Tooltip,
-  ResponsiveContainer,
   Legend,
+  LineChart,
+  Line,
+  Cell,
 } from 'recharts';
+import {
+  AlertTriangle,
+  Trophy,
+  Globe2,
+  Building2,
+  Users,
+  TrendingUp,
+  Download,
+  MapPinned,
+  CalendarRange,
+  Filter,
+  RefreshCw,
+} from 'lucide-react';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/Card';
 
 type SubmissionRow = {
   id: string;
@@ -28,12 +45,52 @@ type BlockResponseRow = {
   block_name: string;
   block_score: number | null;
   age_group: string | null;
+  country?: string | null;
+  city?: string | null;
 };
+
+type SortDir = 'asc' | 'desc';
 
 type AreaAverage = {
   area: string;
   avg: number;
+  count: number;
 };
+
+type CountRow = {
+  label: string;
+  count: number;
+};
+
+type ComparisonRow = {
+  group: string;
+  area: string;
+  avg: number;
+};
+
+type PatternRow = {
+  pattern: string;
+  occurrences: number;
+};
+
+const BRAND = {
+  dark: '#10472f',
+  bright: '#7dd420',
+};
+
+const CHART_COLORS = [
+  '#10472f',
+  '#7dd420',
+  '#1f7a4d',
+  '#4ea66e',
+  '#b7e87a',
+  '#2f855a',
+  '#84cc16',
+  '#16a34a',
+];
+
+const AGE_16_22 = 'Group 16–22';
+const AGE_23_30 = 'Group 23-30';
 
 function round2(value: number) {
   return Math.round(value * 100) / 100;
@@ -44,735 +101,879 @@ function average(values: number[]) {
   return round2(values.reduce((a, b) => a + b, 0) / values.length);
 }
 
-function getShortPriority(area: string) {
-  const value = area.toLowerCase();
-
-  if (value.includes('mobility')) {
-    return 'Improve signage, pedestrian safety and quick low-cost mobility fixes.';
-  }
-  if (value.includes('waste')) {
-    return 'Reinforce waste information, container clarity and local awareness actions.';
-  }
-  if (value.includes('energy') || value.includes('infrastructure')) {
-    return 'Upgrade basic lighting efficiency and identify urgent maintenance issues.';
-  }
-  if (value.includes('pollution')) {
-    return 'Address local hotspots and strengthen immediate monitoring and communication.';
-  }
-  if (value.includes('urban design') || value.includes('public space')) {
-    return 'Improve maintenance, shade, accessibility and quick public-space upgrades.';
-  }
-  if (value.includes('services') || value.includes('governance')) {
-    return 'Simplify access to information and open clearer participation channels.';
-  }
-
-  return 'Define a quick-win action plan focused on visibility, maintenance and accessibility.';
+function safeLabel(value: string | null | undefined, fallback = 'Unknown') {
+  const trimmed = (value || '').trim();
+  return trimmed ? trimmed : fallback;
 }
 
-function getMediumPriority(area: string) {
-  const value = area.toLowerCase();
+function formatDateLabel(dateString: string | null | undefined) {
+  if (!dateString) return 'Unknown';
+  const d = new Date(dateString);
+  if (Number.isNaN(d.getTime())) return 'Unknown';
+  return d.toLocaleDateString('en-GB', {
+    day: '2-digit',
+    month: '2-digit',
+    year: '2-digit',
+  });
+}
 
-  if (value.includes('mobility')) {
-    return 'Plan structural investment in public transport, cycling networks and intermodality.';
-  }
-  if (value.includes('waste')) {
-    return 'Develop a stronger circular-economy system with reuse, repair and education measures.';
-  }
-  if (value.includes('energy') || value.includes('infrastructure')) {
-    return 'Promote medium-term energy modernization and renewable urban infrastructure.';
-  }
-  if (value.includes('pollution')) {
-    return 'Design integrated policies for air, noise and water quality improvement.';
-  }
-  if (value.includes('urban design') || value.includes('public space')) {
-    return 'Expand green infrastructure and inclusive urban planning across neighbourhoods.';
-  }
-  if (value.includes('services') || value.includes('governance')) {
-    return 'Strengthen participatory governance and improve coordination of public services.';
-  }
+function formatMonthLabel(dateString: string | null | undefined) {
+  if (!dateString) return 'Unknown';
+  const d = new Date(dateString);
+  if (Number.isNaN(d.getTime())) return 'Unknown';
+  return d.toLocaleDateString('en-GB', {
+    month: 'short',
+    year: '2-digit',
+  });
+}
 
-  return 'Develop a medium-term improvement roadmap with measurable objectives and local actors.';
+function toCSV(rows: Record<string, string | number | null | undefined>[]) {
+  if (!rows.length) return '';
+  const headers = Object.keys(rows[0]);
+  const escapeCell = (value: unknown) => {
+    const str = String(value ?? '');
+    if (str.includes(',') || str.includes('"') || str.includes('\n')) {
+      return `"${str.replace(/"/g, '""')}"`;
+    }
+    return str;
+  };
+
+  return [
+    headers.join(','),
+    ...rows.map((row) => headers.map((h) => escapeCell(row[h])).join(',')),
+  ].join('\n');
+}
+
+function downloadCSV(filename: string, rows: Record<string, string | number | null | undefined>[]) {
+  const csv = toCSV(rows);
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.setAttribute('download', filename);
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
+
+function groupCounts(items: string[]) {
+  const counts: Record<string, number> = {};
+  items.forEach((item) => {
+    counts[item] = (counts[item] || 0) + 1;
+  });
+  return Object.entries(counts)
+    .map(([label, count]) => ({ label, count }))
+    .sort((a, b) => b.count - a.count);
+}
+
+function buildPatternLabel(area: string, score: number) {
+  if (score <= 2) return `${area}: critical`;
+  if (score <= 3) return `${area}: medium-low`;
+  return `${area}: acceptable/high`;
+}
+
+function sortRows<T>(rows: T[], selector: (row: T) => string | number, dir: SortDir = 'asc') {
+  const copy = [...rows];
+  copy.sort((a, b) => {
+    const va = selector(a);
+    const vb = selector(b);
+    if (typeof va === 'number' && typeof vb === 'number') {
+      return dir === 'asc' ? va - vb : vb - va;
+    }
+    return dir === 'asc'
+      ? String(va).localeCompare(String(vb))
+      : String(vb).localeCompare(String(va));
+  });
+  return copy;
+}
+
+function inferRoadmapType(score: number) {
+  if (score <= 2) return 'Structural change';
+  if (score <= 3) return 'Operational improvement';
+  return 'Quick win';
+}
+
+function inferAction(area: string) {
+  const lower = area.toLowerCase();
+  if (lower.includes('mobility')) return 'Improve safe active mobility and public transport connections';
+  if (lower.includes('waste')) return 'Improve recycling access, clarity, and circular economy services';
+  if (lower.includes('energy')) return 'Modernise urban energy infrastructure and visible renewable solutions';
+  if (lower.includes('pollution')) return 'Reduce the most visible pollution sources through targeted local measures';
+  if (lower.includes('governance') || lower.includes('service')) return 'Improve access to services and youth participation channels';
+  if (lower.includes('urban')) return 'Improve inclusive, shaded, and accessible public spaces';
+  return 'Define a targeted city improvement measure for this weak area';
+}
+
+function inferActors(area: string) {
+  const lower = area.toLowerCase();
+  if (lower.includes('mobility')) return 'Municipality, transport authority, youth organisations';
+  if (lower.includes('waste')) return 'Municipality, waste operator, schools, youth organisations';
+  if (lower.includes('energy')) return 'Municipality, utilities, private sector';
+  if (lower.includes('pollution')) return 'Municipality, environmental authority, local community';
+  if (lower.includes('governance') || lower.includes('service')) return 'Municipality, youth council, public services';
+  return 'Municipality, youth organisations, local stakeholders';
+}
+
+function scoreBand(score: number) {
+  if (score < 2) return 'Very low';
+  if (score < 3) return 'Low';
+  if (score < 4) return 'Medium';
+  return 'High';
+}
+
+function KpiCard({
+  title,
+  value,
+  icon,
+}: {
+  title: string;
+  value: string | number;
+  icon: React.ReactNode;
+}) {
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex items-center justify-between gap-4">
+          <CardTitle>{title}</CardTitle>
+          <div className="rounded-xl bg-emerald-50 p-2">{icon}</div>
+        </div>
+      </CardHeader>
+      <CardContent>
+        <div className="text-3xl font-bold text-slate-900">{value}</div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function BasicTable({
+  headers,
+  rows,
+}: {
+  headers: string[];
+  rows: (string | number)[][];
+}) {
+  return (
+    <div className="overflow-auto">
+      <table className="w-full border-collapse text-sm">
+        <thead>
+          <tr className="border-b border-slate-200 bg-slate-50 text-left">
+            {headers.map((header) => (
+              <th key={header} className="px-3 py-2 font-semibold text-slate-700">
+                {header}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row, idx) => (
+            <tr key={idx} className="border-b border-slate-100">
+              {row.map((cell, cidx) => (
+                <td key={`${idx}-${cidx}`} className="px-3 py-2 text-slate-700">
+                  {cell}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
 }
 
 export default function DashboardPage() {
   const [submissions, setSubmissions] = useState<SubmissionRow[]>([]);
   const [blockResponses, setBlockResponses] = useState<BlockResponseRow[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  const [selectedCountry, setSelectedCountry] = useState('All');
-  const [selectedCity, setSelectedCity] = useState('All');
-  const [selectedAge, setSelectedAge] = useState('All');
+  const [countryFilter, setCountryFilter] = useState('All');
+  const [cityFilter, setCityFilter] = useState('All');
+  const [ageFilter, setAgeFilter] = useState('All');
 
   useEffect(() => {
     async function loadData() {
-      setLoading(true);
+      try {
+        setLoading(true);
+        setError(null);
 
-      const { data: submissionsData, error: submissionsError } = await supabase
-        .from('submissions')
-        .select('id, city, country, age_group, overall_score, overall_result, created_at')
-        .order('created_at', { ascending: false });
+        const submissionsRes = await supabase
+  .from('submissions')
+  .select('id, city, country, age_group, overall_score, overall_result, created_at')
+  .order('created_at', { ascending: false });
 
-      const { data: blockData, error: blockError } = await supabase
-        .from('block_responses')
-        .select('submission_id, block_name, block_score, age_group');
+        const blocksRes = await supabase
+          .from('block_responses')
+          .select('submission_id, block_name, block_score, age_group, country, city');
 
-      if (submissionsError) {
-        console.error('Error loading submissions:', submissionsError);
-      } else {
-        setSubmissions((submissionsData || []) as SubmissionRow[]);
-      }
+        if (blocksRes.error) throw blocksRes.error;
 
-      if (blockError) {
-        console.error('Error loading block responses:', blockError);
-      } else {
-        setBlockResponses((blockData || []) as BlockResponseRow[]);
-      }
-
-      setLoading(false);
+        setSubmissions((submissionsRes.data || []) as SubmissionRow[]);
+        setBlockResponses((blocksRes.data || []) as BlockResponseRow[]);
+      } catch (err: any) {
+  console.error('DASHBOARD LOAD ERROR FULL:', JSON.stringify(err, null, 2));
+  console.error('DASHBOARD LOAD ERROR RAW:', err);
+  const message =
+    err?.message ||
+    err?.error_description ||
+    err?.details ||
+    JSON.stringify(err) ||
+    'Unexpected error loading dashboard';
+  setError(message);
+} finally {
+  setLoading(false);
+}
     }
 
     loadData();
   }, []);
 
-  const countryOptions = useMemo(() => {
-    return [
-      'All',
-      ...Array.from(
-        new Set(submissions.map((s) => s.country).filter((v): v is string => !!v))
-      ).sort(),
-    ];
-  }, [submissions]);
+  const countries = useMemo(
+    () => ['All', ...sortRows([...new Set(submissions.map((s) => safeLabel(s.country)).filter(Boolean))], (v) => v, 'asc')],
+    [submissions]
+  );
 
-  const cityOptions = useMemo(() => {
-    const filteredByCountry =
-      selectedCountry === 'All'
-        ? submissions
-        : submissions.filter((s) => (s.country || 'Unknown') === selectedCountry);
+  const cities = useMemo(
+    () => ['All', ...sortRows([...new Set(submissions.map((s) => safeLabel(s.city)).filter(Boolean))], (v) => v, 'asc')],
+    [submissions]
+  );
 
-    return [
-      'All',
-      ...Array.from(
-        new Set(filteredByCountry.map((s) => s.city).filter((v): v is string => !!v))
-      ).sort(),
-    ];
-  }, [submissions, selectedCountry]);
-
-  const ageOptions = useMemo(() => {
-    return [
-      'All',
-      ...Array.from(
-        new Set(submissions.map((s) => s.age_group).filter((v): v is string => !!v))
-      ).sort(),
-    ];
-  }, [submissions]);
+  const ageGroups = useMemo(
+    () => ['All', ...sortRows([...new Set(submissions.map((s) => safeLabel(s.age_group)).filter(Boolean))], (v) => v, 'asc')],
+    [submissions]
+  );
 
   const filteredSubmissions = useMemo(() => {
     return submissions.filter((s) => {
-      const countryOk =
-        selectedCountry === 'All' || (s.country || 'Unknown') === selectedCountry;
-      const cityOk = selectedCity === 'All' || (s.city || 'Unknown') === selectedCity;
-      const ageOk = selectedAge === 'All' || (s.age_group || 'Unknown') === selectedAge;
-
-      return countryOk && cityOk && ageOk;
+      const matchesCountry = countryFilter === 'All' || safeLabel(s.country) === countryFilter;
+      const matchesCity = cityFilter === 'All' || safeLabel(s.city) === cityFilter;
+      const matchesAge = ageFilter === 'All' || safeLabel(s.age_group) === ageFilter;
+      return matchesCountry && matchesCity && matchesAge;
     });
-  }, [submissions, selectedCountry, selectedCity, selectedAge]);
+  }, [submissions, countryFilter, cityFilter, ageFilter]);
 
-  const filteredSubmissionIds = useMemo(() => {
-    return new Set(filteredSubmissions.map((s) => s.id));
-  }, [filteredSubmissions]);
+  const filteredSubmissionIds = useMemo(() => new Set(filteredSubmissions.map((s) => s.id)), [filteredSubmissions]);
 
   const filteredBlockResponses = useMemo(() => {
-    return blockResponses.filter((row) => filteredSubmissionIds.has(row.submission_id));
+    return blockResponses.filter((b) => filteredSubmissionIds.has(b.submission_id));
   }, [blockResponses, filteredSubmissionIds]);
 
-  const submissionsMap = useMemo(() => {
-    const map = new Map<string, SubmissionRow>();
-    submissions.forEach((s) => map.set(s.id, s));
-    return map;
-  }, [submissions]);
-
   const totalResponses = filteredSubmissions.length;
-
-  const countries = useMemo(() => {
-    return [...new Set(filteredSubmissions.map((s) => s.country).filter(Boolean))];
-  }, [filteredSubmissions]);
-
-  const cities = useMemo(() => {
-    return [...new Set(filteredSubmissions.map((s) => s.city).filter(Boolean))];
-  }, [filteredSubmissions]);
+  const countriesRepresented = useMemo(() => new Set(filteredSubmissions.map((s) => safeLabel(s.country))).size, [filteredSubmissions]);
+  const citiesRepresented = useMemo(() => new Set(filteredSubmissions.map((s) => safeLabel(s.city))).size, [filteredSubmissions]);
+  const ageRepresented = useMemo(() => new Set(filteredSubmissions.map((s) => safeLabel(s.age_group))).size, [filteredSubmissions]);
 
   const averageOverallScore = useMemo(() => {
-    return average(
-      filteredSubmissions
-        .map((s) => s.overall_score)
-        .filter((v): v is number => typeof v === 'number')
-    );
+    return average(filteredSubmissions.map((s) => s.overall_score).filter((v): v is number => typeof v === 'number'));
   }, [filteredSubmissions]);
 
-  const responsesByCountry = useMemo(() => {
-    const counts: Record<string, number> = {};
-    filteredSubmissions.forEach((s) => {
-      const key = s.country || 'Unknown';
-      counts[key] = (counts[key] || 0) + 1;
-    });
-    return Object.entries(counts)
-      .map(([country, count]) => ({ country, count }))
-      .sort((a, b) => b.count - a.count);
+  const responsesByCountry = useMemo<CountRow[]>(() => {
+    return groupCounts(filteredSubmissions.map((s) => safeLabel(s.country))).map((row) => ({ label: row.label, count: row.count }));
   }, [filteredSubmissions]);
 
-  const responsesByCity = useMemo(() => {
-    const counts: Record<string, number> = {};
-    filteredSubmissions.forEach((s) => {
-      const key = s.city || 'Unknown';
-      counts[key] = (counts[key] || 0) + 1;
-    });
-    return Object.entries(counts)
-      .map(([city, count]) => ({ city, count }))
-      .sort((a, b) => b.count - a.count);
+  const responsesByCity = useMemo<CountRow[]>(() => {
+    return groupCounts(filteredSubmissions.map((s) => safeLabel(s.city))).map((row) => ({ label: row.label, count: row.count }));
   }, [filteredSubmissions]);
 
-  const responsesByAge = useMemo(() => {
-    const counts: Record<string, number> = {};
-    filteredSubmissions.forEach((s) => {
-      const key = s.age_group || 'Unknown';
-      counts[key] = (counts[key] || 0) + 1;
-    });
-    return Object.entries(counts)
-      .map(([age, count]) => ({ age, count }))
-      .sort((a, b) => a.age.localeCompare(b.age));
+  const responsesByAge = useMemo<CountRow[]>(() => {
+    return groupCounts(filteredSubmissions.map((s) => safeLabel(s.age_group))).map((row) => ({ label: row.label, count: row.count }));
   }, [filteredSubmissions]);
 
-  const averageByArea = useMemo((): AreaAverage[] => {
+  const averageByArea = useMemo<AreaAverage[]>(() => {
     const grouped: Record<string, number[]> = {};
 
     filteredBlockResponses.forEach((row) => {
       if (typeof row.block_score !== 'number') return;
-      if (!grouped[row.block_name]) grouped[row.block_name] = [];
-      grouped[row.block_name].push(row.block_score);
+      const area = safeLabel(row.block_name);
+      if (!grouped[area]) grouped[area] = [];
+      grouped[area].push(row.block_score);
     });
 
     return Object.entries(grouped)
-      .map(([area, scores]) => ({
-        area,
-        avg: average(scores),
-      }))
+      .map(([area, scores]) => ({ area, avg: average(scores), count: scores.length }))
       .sort((a, b) => a.avg - b.avg);
   }, [filteredBlockResponses]);
 
-  const weakestAreas = useMemo(() => {
-    return [...averageByArea].sort((a, b) => a.avg - b.avg).slice(0, 3);
-  }, [averageByArea]);
+  const weakestAreas = useMemo(() => averageByArea.slice(0, 3), [averageByArea]);
+  const strongestAreas = useMemo(() => [...averageByArea].sort((a, b) => b.avg - a.avg).slice(0, 3), [averageByArea]);
 
-  const shortPriorities = useMemo(() => {
-    return weakestAreas.map((item) => ({
-      area: item.area,
-      avg: item.avg,
-      action: getShortPriority(item.area),
-    }));
-  }, [weakestAreas]);
-
-  const mediumPriorities = useMemo(() => {
-    return weakestAreas.map((item) => ({
-      area: item.area,
-      avg: item.avg,
-      action: getMediumPriority(item.area),
-    }));
-  }, [weakestAreas]);
-
-  const averageByAgeAndArea = useMemo(() => {
+  const comparisonByCountry = useMemo<ComparisonRow[]>(() => {
     const grouped: Record<string, Record<string, number[]>> = {};
-
     filteredBlockResponses.forEach((row) => {
-      const age = row.age_group || 'Unknown';
-      const area = row.block_name;
-      const score = row.block_score;
-
-      if (typeof score !== 'number') return;
-
-      if (!grouped[age]) grouped[age] = {};
-      if (!grouped[age][area]) grouped[age][area] = [];
-      grouped[age][area].push(score);
+      if (typeof row.block_score !== 'number') return;
+      const group = safeLabel(row.country);
+      const area = safeLabel(row.block_name);
+      if (!grouped[group]) grouped[group] = {};
+      if (!grouped[group][area]) grouped[group][area] = [];
+      grouped[group][area].push(row.block_score);
     });
 
-    const result: Record<string, Record<string, number>> = {};
-
-    Object.keys(grouped).forEach((age) => {
-      result[age] = {};
-      Object.keys(grouped[age]).forEach((area) => {
-        result[age][area] = average(grouped[age][area]);
-      });
-    });
-
-    return result;
+    return Object.entries(grouped).flatMap(([group, areas]) =>
+      Object.entries(areas).map(([area, scores]) => ({ group, area, avg: average(scores) }))
+    );
   }, [filteredBlockResponses]);
 
-  const areaByCountryChartData = useMemo(() => {
+  const comparisonByCity = useMemo<ComparisonRow[]>(() => {
+    const grouped: Record<string, Record<string, number[]>> = {};
+    filteredBlockResponses.forEach((row) => {
+      if (typeof row.block_score !== 'number') return;
+      const group = safeLabel(row.city);
+      const area = safeLabel(row.block_name);
+      if (!grouped[group]) grouped[group] = {};
+      if (!grouped[group][area]) grouped[group][area] = [];
+      grouped[group][area].push(row.block_score);
+    });
+
+    return Object.entries(grouped).flatMap(([group, areas]) =>
+      Object.entries(areas).map(([area, scores]) => ({ group, area, avg: average(scores) }))
+    );
+  }, [filteredBlockResponses]);
+
+  const comparisonByAge = useMemo<ComparisonRow[]>(() => {
+    const grouped: Record<string, Record<string, number[]>> = {};
+    filteredBlockResponses.forEach((row) => {
+      if (typeof row.block_score !== 'number') return;
+      const group = safeLabel(row.age_group);
+      const area = safeLabel(row.block_name);
+      if (!grouped[group]) grouped[group] = {};
+      if (!grouped[group][area]) grouped[group][area] = [];
+      grouped[group][area].push(row.block_score);
+    });
+
+    return Object.entries(grouped).flatMap(([group, areas]) =>
+      Object.entries(areas).map(([area, scores]) => ({ group, area, avg: average(scores) }))
+    );
+  }, [filteredBlockResponses]);
+
+  const ageBandComparison = useMemo(() => {
+    const data = averageByArea.map((row) => ({
+      area: row.area,
+      [AGE_16_22]: 0,
+      [AGE_23_30]: 0,
+    }));
+
+    const areaIndex = new Map(data.map((d, idx) => [d.area, idx]));
     const grouped: Record<string, Record<string, number[]>> = {};
 
     filteredBlockResponses.forEach((row) => {
-      const submission = submissionsMap.get(row.submission_id);
-      const country = submission?.country || 'Unknown';
-      const area = row.block_name;
-      const score = row.block_score;
-
-      if (typeof score !== 'number') return;
-
-      if (!grouped[area]) grouped[area] = {};
-      if (!grouped[area][country]) grouped[area][country] = [];
-      grouped[area][country].push(score);
+      if (typeof row.block_score !== 'number') return;
+      const age = safeLabel(row.age_group);
+      const area = safeLabel(row.block_name);
+      if (!grouped[age]) grouped[age] = {};
+      if (!grouped[age][area]) grouped[age][area] = [];
+      grouped[age][area].push(row.block_score);
     });
 
-    return Object.entries(grouped).map(([area, countryScores]) => {
-      const row: Record<string, string | number> = { area };
-      Object.entries(countryScores).forEach(([country, scores]) => {
-        row[country] = average(scores);
+    Object.entries(grouped).forEach(([age, areas]) => {
+      Object.entries(areas).forEach(([area, scores]) => {
+        const idx = areaIndex.get(area);
+        if (idx === undefined) return;
+        (data[idx] as any)[age] = average(scores);
       });
-      return row;
     });
-  }, [filteredBlockResponses, submissionsMap]);
 
-  const countriesInChart = useMemo(() => {
-    return Array.from(
-      new Set(filteredSubmissions.map((s) => s.country).filter((v): v is string => !!v))
-    ).sort();
+    return data;
+  }, [averageByArea, filteredBlockResponses]);
+
+  const areaChartData = useMemo(() => averageByArea.map((row) => ({ area: row.area, avg: row.avg, count: row.count })), [averageByArea]);
+  const countryChartData = useMemo(() => responsesByCountry.map((row) => ({ country: row.label, count: row.count })), [responsesByCountry]);
+  const ageChartData = useMemo(() => responsesByAge.map((row) => ({ age: row.label, count: row.count })), [responsesByAge]);
+
+  const cityChartData = useMemo(() => {
+    const grouped: Record<string, number[]> = {};
+    filteredSubmissions.forEach((s) => {
+      if (typeof s.overall_score !== 'number') return;
+      const city = safeLabel(s.city);
+      if (!grouped[city]) grouped[city] = [];
+      grouped[city].push(s.overall_score);
+    });
+
+    return Object.entries(grouped)
+      .map(([city, scores]) => ({ city, avg: average(scores), responses: scores.length }))
+      .sort((a, b) => b.responses - a.responses);
   }, [filteredSubmissions]);
 
-  function resetFilters() {
-    setSelectedCountry('All');
-    setSelectedCity('All');
-    setSelectedAge('All');
-  }
+  const responsesOverTime = useMemo(() => {
+    const grouped: Record<string, number[]> = {};
+    filteredSubmissions.forEach((s) => {
+      const key = formatMonthLabel(s.created_at);
+      if (!grouped[key]) grouped[key] = [];
+      grouped[key].push(typeof s.overall_score === 'number' ? s.overall_score : 0);
+    });
+
+    return Object.entries(grouped).map(([month, scores]) => ({
+      month,
+      responses: scores.length,
+      avgScore: average(scores.filter((s) => s > 0)),
+    }));
+  }, [filteredSubmissions]);
+
+  const mapCityData: {
+  city: string;
+  lat: number;
+  lng: number;
+  count: number;
+  avgScore: number;
+}[] = [];
+
+const hasMapData = false;
+
+  
+  const weakestIndicators = useMemo(() => {
+    return averageByArea.slice(0, 10).map((row) => ({
+      indicator: row.area,
+      block: 'Area-level proxy',
+      avg: row.avg,
+      count: row.count,
+    }));
+  }, [averageByArea]);
+
+  const repeatedPatterns = useMemo<PatternRow[]>(() => {
+    const labels: string[] = [];
+    filteredBlockResponses.forEach((row) => {
+      if (typeof row.block_score !== 'number') return;
+      labels.push(buildPatternLabel(safeLabel(row.block_name), row.block_score));
+    });
+
+    return groupCounts(labels)
+      .map((row) => ({ pattern: row.label, occurrences: row.count }))
+      .sort((a, b) => b.occurrences - a.occurrences)
+      .slice(0, 10);
+  }, [filteredBlockResponses]);
+
+  const roadmapSuggestions = useMemo(() => {
+    return weakestAreas.map((row, index) => ({
+      priority: index + 1,
+      area: row.area,
+      score: row.avg,
+      scoreBand: scoreBand(row.avg),
+      actionType: inferRoadmapType(row.avg),
+      suggestedAction: inferAction(row.area),
+      actors: inferActors(row.area),
+    }));
+  }, [weakestAreas]);
+
+  const exportOverview = () => {
+    downloadCSV('dashboard-overview.csv', filteredSubmissions.map((s) => ({
+      id: s.id,
+      city: safeLabel(s.city),
+      country: safeLabel(s.country),
+      age_group: safeLabel(s.age_group),
+      overall_score: s.overall_score,
+      overall_result: safeLabel(s.overall_result),
+      created_at: s.created_at || '',
+    })));
+  };
+
+  const exportAreas = () => {
+    downloadCSV('dashboard-area-averages.csv', averageByArea.map((row) => ({
+      area: row.area,
+      average_score: row.avg,
+      responses: row.count,
+    })));
+  };
+
+  const exportRoadmap = () => {
+    downloadCSV('dashboard-roadmap-suggestions.csv', roadmapSuggestions.map((row) => ({
+      priority: row.priority,
+      area: row.area,
+      score: row.score,
+      score_band: row.scoreBand,
+      action_type: row.actionType,
+      suggested_action: row.suggestedAction,
+      actors: row.actors,
+    })));
+  };
+
+  const resetFilters = () => {
+    setCountryFilter('All');
+    setCityFilter('All');
+    setAgeFilter('All');
+  };
 
   if (loading) {
     return (
-      <main style={{ padding: '24px' }}>
-        <h1>Green Cities Audit Dashboard</h1>
-        <p>Cargando datos...</p>
+      <main className="min-h-screen bg-slate-50 p-6">
+        <div className="mx-auto max-w-7xl">
+          <div className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+            <RefreshCw className="h-5 w-5 animate-spin text-emerald-700" />
+            <p className="text-slate-700">Loading dashboard...</p>
+          </div>
+        </div>
+      </main>
+    );
+  }
+
+  if (error) {
+    return (
+      <main className="min-h-screen bg-slate-50 p-6">
+        <div className="mx-auto max-w-7xl">
+          <div className="rounded-2xl border border-red-200 bg-red-50 p-6 text-red-700 shadow-sm">
+            <p className="font-semibold">Dashboard error</p>
+            <p className="mt-2 text-sm">{error}</p>
+          </div>
+        </div>
       </main>
     );
   }
 
   return (
-    <main style={{ padding: '24px', background: '#f8fafc', minHeight: '100vh' }}>
-      <h1 style={{ marginBottom: '8px' }}>Green Cities Audit Dashboard</h1>
-      <p style={{ marginBottom: '24px', color: '#475569' }}>
-        Overview, filtros, comparativas por área y prioridades automáticas
-      </p>
-
-      <div style={{ ...panelStyle, marginBottom: '24px' }}>
-        <h2 style={panelTitle}>Filters</h2>
-
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(4, minmax(0, 1fr))',
-            gap: '16px',
-            alignItems: 'end',
-          }}
-        >
+    <main className="min-h-screen bg-slate-50 p-6">
+      <div className="mx-auto max-w-7xl space-y-8">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
           <div>
-            <label style={labelStyle}>Country</label>
-            <select
-              value={selectedCountry}
-              onChange={(e) => {
-                setSelectedCountry(e.target.value);
-                setSelectedCity('All');
-              }}
-              style={selectStyle}
-            >
-              {countryOptions.map((option) => (
-                <option key={option} value={option}>
-                  {option}
-                </option>
-              ))}
-            </select>
+            <h1 className="text-3xl font-bold text-slate-900">Green Cities Audit Dashboard</h1>
+            <p className="mt-2 max-w-3xl text-slate-600">
+              Overview, distributions, comparisons, weakest and strongest areas, charts, timeline,
+              roadmap suggestions and exportables.
+            </p>
           </div>
 
-          <div>
-            <label style={labelStyle}>City</label>
-            <select
-              value={selectedCity}
-              onChange={(e) => setSelectedCity(e.target.value)}
-              style={selectStyle}
-            >
-              {cityOptions.map((option) => (
-                <option key={option} value={option}>
-                  {option}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div>
-            <label style={labelStyle}>Age group</label>
-            <select
-              value={selectedAge}
-              onChange={(e) => setSelectedAge(e.target.value)}
-              style={selectStyle}
-            >
-              {ageOptions.map((option) => (
-                <option key={option} value={option}>
-                  {option}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div>
-            <button onClick={resetFilters} style={buttonStyle}>
-              Reset filters
+          <div className="flex flex-wrap gap-2">
+            <button onClick={exportOverview} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50">
+              <Download className="h-4 w-4" />
+              Export overview
+            </button>
+            <button onClick={exportAreas} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50">
+              <Download className="h-4 w-4" />
+              Export areas
+            </button>
+            <button onClick={exportRoadmap} className="inline-flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-medium text-emerald-800 shadow-sm hover:bg-emerald-100">
+              <Download className="h-4 w-4" />
+              Export roadmap
             </button>
           </div>
         </div>
-      </div>
 
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(4, minmax(0, 1fr))',
-          gap: '16px',
-          marginBottom: '24px',
-        }}
-      >
-        <div style={cardStyle}>
-          <p style={cardLabel}>Total responses</p>
-          <p style={cardValue}>{totalResponses}</p>
-        </div>
-
-        <div style={cardStyle}>
-          <p style={cardLabel}>Countries represented</p>
-          <p style={cardValue}>{countries.length}</p>
-        </div>
-
-        <div style={cardStyle}>
-          <p style={cardLabel}>Cities represented</p>
-          <p style={cardValue}>{cities.length}</p>
-        </div>
-
-        <div style={cardStyle}>
-          <p style={cardLabel}>Average overall score</p>
-          <p style={cardValue}>{averageOverallScore}</p>
-        </div>
-      </div>
-
-      <div style={{ ...panelStyle, marginBottom: '24px' }}>
-        <h2 style={panelTitle}>Weakest areas</h2>
-        {weakestAreas.length === 0 ? (
-          <p style={{ margin: 0 }}>No data available for the current filters.</p>
-        ) : (
-          weakestAreas.map((item, index) => (
-            <div key={item.area} style={rowStyle}>
-              <span>
-                {index + 1}. {item.area}
-              </span>
-              <strong>{item.avg}</strong>
+        <Card>
+          <CardHeader>
+            <div className="flex items-center justify-between gap-4">
+              <CardTitle className="flex items-center gap-2">
+                <Filter className="h-5 w-5 text-emerald-700" />
+                Filters
+              </CardTitle>
+              <button onClick={resetFilters} className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-50">
+                Reset
+              </button>
             </div>
-          ))
-        )}
-      </div>
-
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
-          gap: '16px',
-          marginBottom: '24px',
-        }}
-      >
-        <div style={panelStyle}>
-          <h2 style={panelTitle}>Short priorities</h2>
-          {shortPriorities.length === 0 ? (
-            <p style={{ margin: 0 }}>No short priorities available.</p>
-          ) : (
-            shortPriorities.map((item) => (
-              <div key={item.area} style={priorityBoxStyle}>
-                <div style={priorityHeaderStyle}>
-                  <strong>{item.area}</strong>
-                  <span>{item.avg}</span>
-                </div>
-                <p style={priorityTextStyle}>{item.action}</p>
+          </CardHeader>
+          <CardContent>
+            <div className="grid gap-4 md:grid-cols-3">
+              <div>
+                <label className="mb-1 block text-sm font-medium text-slate-700">Country</label>
+                <select value={countryFilter} onChange={(e) => setCountryFilter(e.target.value)} className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm">
+                  {countries.map((country) => (
+                    <option key={country} value={country}>{country}</option>
+                  ))}
+                </select>
               </div>
-            ))
-          )}
-        </div>
-
-        <div style={panelStyle}>
-          <h2 style={panelTitle}>Medium priorities</h2>
-          {mediumPriorities.length === 0 ? (
-            <p style={{ margin: 0 }}>No medium priorities available.</p>
-          ) : (
-            mediumPriorities.map((item) => (
-              <div key={item.area} style={priorityBoxStyle}>
-                <div style={priorityHeaderStyle}>
-                  <strong>{item.area}</strong>
-                  <span>{item.avg}</span>
-                </div>
-                <p style={priorityTextStyle}>{item.action}</p>
+              <div>
+                <label className="mb-1 block text-sm font-medium text-slate-700">City</label>
+                <select value={cityFilter} onChange={(e) => setCityFilter(e.target.value)} className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm">
+                  {cities.map((city) => (
+                    <option key={city} value={city}>{city}</option>
+                  ))}
+                </select>
               </div>
-            ))
-          )}
-        </div>
-      </div>
-
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
-          gap: '16px',
-          marginBottom: '24px',
-        }}
-      >
-        <div style={panelStyle}>
-          <h2 style={panelTitle}>Average score by area</h2>
-          <div style={{ width: '100%', height: 320 }}>
-            <ResponsiveContainer>
-              <BarChart data={averageByArea}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="area" hide />
-                <YAxis domain={[0, 5]} />
-                <Tooltip />
-                <Bar dataKey="avg" />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-
-          <div style={{ marginTop: '16px' }}>
-            {averageByArea.map((item) => (
-              <div key={item.area} style={rowStyle}>
-                <span>{item.area}</span>
-                <strong>{item.avg}</strong>
+              <div>
+                <label className="mb-1 block text-sm font-medium text-slate-700">Age group</label>
+                <select value={ageFilter} onChange={(e) => setAgeFilter(e.target.value)} className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm">
+                  {ageGroups.map((age) => (
+                    <option key={age} value={age}>{age}</option>
+                  ))}
+                </select>
               </div>
-            ))}
-          </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        <div className="grid gap-4 md:grid-cols-3 xl:grid-cols-6">
+          <KpiCard title="Total responses" value={totalResponses} icon={<Users className="h-5 w-5 text-emerald-700" />} />
+          <KpiCard title="Countries" value={countriesRepresented} icon={<Globe2 className="h-5 w-5 text-emerald-700" />} />
+          <KpiCard title="Cities" value={citiesRepresented} icon={<Building2 className="h-5 w-5 text-emerald-700" />} />
+          <KpiCard title="Age groups" value={ageRepresented} icon={<Users className="h-5 w-5 text-emerald-700" />} />
+          <KpiCard title="Global average" value={averageOverallScore} icon={<TrendingUp className="h-5 w-5 text-emerald-700" />} />
+          <KpiCard title="Timeline points" value={responsesOverTime.length} icon={<CalendarRange className="h-5 w-5 text-emerald-700" />} />
         </div>
 
-        <div style={panelStyle}>
-          <h2 style={panelTitle}>Responses by city</h2>
-          <div style={{ width: '100%', height: 320 }}>
-            <ResponsiveContainer>
-              <BarChart data={responsesByCity}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="city" hide />
-                <YAxis />
-                <Tooltip />
-                <Bar dataKey="count" />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-
-          <div style={{ marginTop: '16px' }}>
-            {responsesByCity.map((item) => (
-              <div key={item.city} style={rowStyle}>
-                <span>{item.city}</span>
-                <strong>{item.count}</strong>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      <div style={{ ...panelStyle, marginBottom: '24px' }}>
-        <h2 style={panelTitle}>Area comparison by country</h2>
-        <div style={{ width: '100%', height: 420 }}>
-          <ResponsiveContainer>
-            <BarChart data={areaByCountryChartData}>
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey="area" hide />
-              <YAxis domain={[0, 5]} />
-              <Tooltip />
-              <Legend />
-              {countriesInChart.map((country) => (
-                <Bar key={country} dataKey={country} />
-              ))}
-            </BarChart>
-          </ResponsiveContainer>
+        <div className="grid gap-4 lg:grid-cols-3">
+          <Card>
+            <CardHeader><CardTitle>Distribution by country</CardTitle></CardHeader>
+            <CardContent>
+              <BasicTable headers={['Country', 'Responses']} rows={responsesByCountry.map((row) => [row.label, row.count])} />
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader><CardTitle>Distribution by city</CardTitle></CardHeader>
+            <CardContent>
+              <BasicTable headers={['City', 'Responses']} rows={responsesByCity.map((row) => [row.label, row.count])} />
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader><CardTitle>Distribution by age</CardTitle></CardHeader>
+            <CardContent>
+              <BasicTable headers={['Age group', 'Responses']} rows={responsesByAge.map((row) => [row.label, row.count])} />
+            </CardContent>
+          </Card>
         </div>
 
-        <div style={{ marginTop: '16px' }}>
-          {areaByCountryChartData.map((row, index) => (
-            <div
-              key={`${String(row.area)}-${index}`}
-              style={{
-                padding: '12px 0',
-                borderBottom: '1px solid #e2e8f0',
-              }}
-            >
-              <strong>{String(row.area)}</strong>
-              <div style={{ marginTop: '8px', display: 'grid', gap: '6px' }}>
-                {countriesInChart.map((country) => (
-                  <div
-                    key={`${String(row.area)}-${country}`}
-                    style={{ display: 'flex', justifyContent: 'space-between' }}
-                  >
-                    <span>{country}</span>
-                    <span>{typeof row[country] === 'number' ? row[country] : '-'}</span>
+        <div className="grid gap-4 lg:grid-cols-2">
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <AlertTriangle className="h-5 w-5 text-orange-600" />
+                Top 3 weakest areas
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-3">
+                {weakestAreas.map((item, idx) => (
+                  <div key={item.area} className="flex items-center justify-between rounded-xl border border-orange-100 bg-orange-50 p-3">
+                    <div>
+                      <p className="font-medium text-slate-900">{idx + 1}. {item.area}</p>
+                      <p className="text-sm text-slate-500">{item.count} scored responses</p>
+                    </div>
+                    <div className="text-lg font-bold text-orange-700">{item.avg}</div>
                   </div>
                 ))}
               </div>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
-          gap: '16px',
-          marginBottom: '24px',
-        }}
-      >
-        <div style={panelStyle}>
-          <h2 style={panelTitle}>Responses by country</h2>
-          {responsesByCountry.map((item) => (
-            <div key={item.country} style={rowStyle}>
-              <span>{item.country}</span>
-              <strong>{item.count}</strong>
-            </div>
-          ))}
-        </div>
-
-        <div style={panelStyle}>
-          <h2 style={panelTitle}>Responses by city</h2>
-          {responsesByCity.map((item) => (
-            <div key={item.city} style={rowStyle}>
-              <span>{item.city}</span>
-              <strong>{item.count}</strong>
-            </div>
-          ))}
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Trophy className="h-5 w-5 text-emerald-700" />
+                Top 3 strongest areas
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-3">
+                {strongestAreas.map((item, idx) => (
+                  <div key={item.area} className="flex items-center justify-between rounded-xl border border-emerald-100 bg-emerald-50 p-3">
+                    <div>
+                      <p className="font-medium text-slate-900">{idx + 1}. {item.area}</p>
+                      <p className="text-sm text-slate-500">{item.count} scored responses</p>
+                    </div>
+                    <div className="text-lg font-bold text-emerald-700">{item.avg}</div>
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
         </div>
 
-        <div style={panelStyle}>
-          <h2 style={panelTitle}>Responses by age group</h2>
-          {responsesByAge.map((item) => (
-            <div key={item.age} style={rowStyle}>
-              <span>{item.age}</span>
-              <strong>{item.count}</strong>
-            </div>
-          ))}
+        <Card>
+          <CardHeader><CardTitle>Average results by block / area</CardTitle></CardHeader>
+          <CardContent>
+            <BasicTable headers={['Area', 'Average score', 'Responses', 'Band']} rows={averageByArea.map((row) => [row.area, row.avg, row.count, scoreBand(row.avg)])} />
+          </CardContent>
+        </Card>
+
+        <div className="grid gap-4 xl:grid-cols-2">
+          <Card>
+            <CardHeader><CardTitle>Comparison by country</CardTitle></CardHeader>
+            <CardContent>
+              <BasicTable headers={['Country', 'Area', 'Average score']} rows={comparisonByCountry.map((row) => [row.group, row.area, row.avg])} />
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader><CardTitle>Comparison by city</CardTitle></CardHeader>
+            <CardContent>
+              <BasicTable headers={['City', 'Area', 'Average score']} rows={comparisonByCity.map((row) => [row.group, row.area, row.avg])} />
+            </CardContent>
+          </Card>
         </div>
-      </div>
 
-      <div style={panelStyle}>
-        <h2 style={panelTitle}>Age group × area</h2>
+        <div className="grid gap-4 xl:grid-cols-2">
+          <Card>
+            <CardHeader><CardTitle>Comparison by age group</CardTitle></CardHeader>
+            <CardContent>
+              <BasicTable headers={['Age group', 'Area', 'Average score']} rows={comparisonByAge.map((row) => [row.group, row.area, row.avg])} />
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader><CardTitle>16–22 vs 23–30</CardTitle></CardHeader>
+            <CardContent>
+              <div className="h-[360px] w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={ageBandComparison} margin={{ top: 10, right: 20, left: 0, bottom: 40 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                    <XAxis dataKey="area" angle={-20} textAnchor="end" interval={0} height={70} tick={{ fill: '#334155', fontSize: 12 }} />
+                    <YAxis domain={[0, 5]} tick={{ fill: '#334155', fontSize: 12 }} />
+                    <Tooltip />
+                    <Legend />
+                    <Bar dataKey={AGE_16_22} fill={BRAND.dark} radius={[6, 6, 0, 0]} />
+                    <Bar dataKey={AGE_23_30} fill={BRAND.bright} radius={[6, 6, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
 
-        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-          <thead>
-            <tr style={{ borderBottom: '1px solid #cbd5e1', textAlign: 'left' }}>
-              <th style={thStyle}>Age group</th>
-              <th style={thStyle}>Area</th>
-              <th style={thStyle}>Average score</th>
-            </tr>
-          </thead>
-          <tbody>
-            {Object.entries(averageByAgeAndArea).flatMap(([age, areas]) =>
-              Object.entries(areas).map(([area, score]) => (
-                <tr key={`${age}-${area}`} style={{ borderBottom: '1px solid #e2e8f0' }}>
-                  <td style={tdStyle}>{age}</td>
-                  <td style={tdStyle}>{area}</td>
-                  <td style={tdStyle}>
-                    <strong>{score}</strong>
-                  </td>
-                </tr>
-              ))
-            )}
-          </tbody>
-        </table>
+        <div className="grid gap-4 xl:grid-cols-2">
+          <Card>
+            <CardHeader><CardTitle>Bar chart by area</CardTitle></CardHeader>
+            <CardContent>
+              <div className="h-[360px] w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={areaChartData} margin={{ top: 10, right: 20, left: 0, bottom: 40 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                    <XAxis dataKey="area" angle={-20} textAnchor="end" interval={0} height={70} tick={{ fill: '#334155', fontSize: 12 }} />
+                    <YAxis domain={[0, 5]} tick={{ fill: '#334155', fontSize: 12 }} />
+                    <Tooltip />
+                    <Legend />
+                    <Bar dataKey="avg" name="Average score" radius={[6, 6, 0, 0]}>
+                      {areaChartData.map((entry, index) => (
+                        <Cell key={`cell-${entry.area}`} fill={CHART_COLORS[index % CHART_COLORS.length]} />
+                      ))}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader><CardTitle>Chart by countries</CardTitle></CardHeader>
+            <CardContent>
+              <div className="h-[360px] w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={countryChartData} margin={{ top: 10, right: 20, left: 0, bottom: 20 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                    <XAxis dataKey="country" tick={{ fill: '#334155', fontSize: 12 }} />
+                    <YAxis tick={{ fill: '#334155', fontSize: 12 }} />
+                    <Tooltip />
+                    <Bar dataKey="count" name="Responses" radius={[6, 6, 0, 0]}>
+                      {countryChartData.map((entry, index) => (
+                        <Cell key={`country-${entry.country}`} fill={CHART_COLORS[index % CHART_COLORS.length]} />
+                      ))}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+
+        <div className="grid gap-4 xl:grid-cols-2">
+          <Card>
+            <CardHeader><CardTitle>Chart by age groups</CardTitle></CardHeader>
+            <CardContent>
+              <div className="h-[320px] w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={ageChartData} margin={{ top: 10, right: 20, left: 0, bottom: 20 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                    <XAxis dataKey="age" tick={{ fill: '#334155', fontSize: 12 }} />
+                    <YAxis tick={{ fill: '#334155', fontSize: 12 }} />
+                    <Tooltip />
+                    <Bar dataKey="count" name="Responses" radius={[6, 6, 0, 0]}>
+                      {ageChartData.map((entry, index) => (
+                        <Cell key={`age-${entry.age}`} fill={CHART_COLORS[index % CHART_COLORS.length]} />
+                      ))}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader><CardTitle>Comparison between cities</CardTitle></CardHeader>
+            <CardContent>
+              <div className="h-[320px] w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={cityChartData} margin={{ top: 10, right: 20, left: 0, bottom: 40 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                    <XAxis dataKey="city" angle={-20} textAnchor="end" interval={0} height={70} tick={{ fill: '#334155', fontSize: 12 }} />
+                    <YAxis domain={[0, 5]} tick={{ fill: '#334155', fontSize: 12 }} />
+                    <Tooltip />
+                    <Bar dataKey="avg" name="Average score" radius={[6, 6, 0, 0]}>
+                      {cityChartData.map((entry, index) => (
+                        <Cell key={`city-${entry.city}`} fill={CHART_COLORS[index % CHART_COLORS.length]} />
+                      ))}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+
+        <div className="grid gap-4 xl:grid-cols-2">
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <MapPinned className="h-5 w-5 text-emerald-700" />
+                Map by cities
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              {hasMapData ? (
+                <BasicTable headers={['City', 'Lat', 'Lng', 'Responses', 'Avg score']} rows={mapCityData.map((row) => [row.city, row.lat, row.lng, row.count, row.avgScore])} />
+              ) : (
+                <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+                  No geographic coordinates detected. For a real map you need latitude/longitude in submissions.
+                </div>
+              )}
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <CalendarRange className="h-5 w-5 text-emerald-700" />
+                Timeline view
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="h-[320px] w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={responsesOverTime} margin={{ top: 10, right: 20, left: 0, bottom: 20 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                    <XAxis dataKey="month" tick={{ fill: '#334155', fontSize: 12 }} />
+                    <YAxis yAxisId="left" tick={{ fill: '#334155', fontSize: 12 }} />
+                    <YAxis yAxisId="right" orientation="right" domain={[0, 5]} tick={{ fill: '#334155', fontSize: 12 }} />
+                    <Tooltip />
+                    <Legend />
+                    <Line yAxisId="left" type="monotone" dataKey="responses" stroke={BRAND.dark} strokeWidth={3} dot={{ fill: BRAND.dark }} name="Responses" />
+                    <Line yAxisId="right" type="monotone" dataKey="avgScore" stroke={BRAND.bright} strokeWidth={3} dot={{ fill: BRAND.bright }} name="Average score" />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+
+        <div className="grid gap-4 xl:grid-cols-2">
+          <Card>
+            <CardHeader><CardTitle>Weakest indicators</CardTitle></CardHeader>
+            <CardContent>
+              <div className="mb-3 rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">
+                Since there is no item_responses table yet, this section uses the weakest areas as a proxy.
+              </div>
+              <BasicTable headers={['Indicator proxy', 'Block', 'Avg score', 'Responses']} rows={weakestIndicators.map((row) => [row.indicator, row.block, row.avg, row.count])} />
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader><CardTitle>Repeated patterns</CardTitle></CardHeader>
+            <CardContent>
+              <BasicTable headers={['Pattern', 'Occurrences']} rows={repeatedPatterns.map((row) => [row.pattern, row.occurrences])} />
+            </CardContent>
+          </Card>
+        </div>
+
+        <Card>
+          <CardHeader><CardTitle>Roadmap suggestions from the weakest areas</CardTitle></CardHeader>
+          <CardContent>
+            <BasicTable headers={['Priority', 'Area', 'Score', 'Band', 'Action type', 'Suggested action', 'Actors']} rows={roadmapSuggestions.map((row) => [row.priority, row.area, row.score, row.scoreBand, row.actionType, row.suggestedAction, row.actors])} />
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader><CardTitle>Recent submissions</CardTitle></CardHeader>
+          <CardContent>
+            <BasicTable headers={['Date', 'Country', 'City', 'Age', 'Overall score', 'Result']} rows={filteredSubmissions.slice(0, 20).map((s) => [formatDateLabel(s.created_at), safeLabel(s.country), safeLabel(s.city), safeLabel(s.age_group), typeof s.overall_score === 'number' ? s.overall_score : '-', safeLabel(s.overall_result)])} />
+          </CardContent>
+        </Card>
       </div>
     </main>
   );
 }
-
-const cardStyle: React.CSSProperties = {
-  background: '#ffffff',
-  border: '1px solid #e2e8f0',
-  borderRadius: '12px',
-  padding: '16px',
-};
-
-const cardLabel: React.CSSProperties = {
-  margin: 0,
-  fontSize: '14px',
-  color: '#64748b',
-};
-
-const cardValue: React.CSSProperties = {
-  margin: '8px 0 0 0',
-  fontSize: '28px',
-  fontWeight: 700,
-  color: '#0f172a',
-};
-
-const panelStyle: React.CSSProperties = {
-  background: '#ffffff',
-  border: '1px solid #e2e8f0',
-  borderRadius: '12px',
-  padding: '16px',
-};
-
-const panelTitle: React.CSSProperties = {
-  marginTop: 0,
-  marginBottom: '16px',
-  fontSize: '18px',
-};
-
-const rowStyle: React.CSSProperties = {
-  display: 'flex',
-  justifyContent: 'space-between',
-  padding: '10px 0',
-  borderBottom: '1px solid #e2e8f0',
-};
-
-const thStyle: React.CSSProperties = {
-  padding: '10px 8px',
-};
-
-const tdStyle: React.CSSProperties = {
-  padding: '10px 8px',
-};
-
-const labelStyle: React.CSSProperties = {
-  display: 'block',
-  marginBottom: '6px',
-  fontSize: '14px',
-  color: '#334155',
-};
-
-const selectStyle: React.CSSProperties = {
-  width: '100%',
-  padding: '10px 12px',
-  borderRadius: '8px',
-  border: '1px solid #cbd5e1',
-  background: '#ffffff',
-};
-
-const buttonStyle: React.CSSProperties = {
-  width: '100%',
-  padding: '10px 12px',
-  borderRadius: '8px',
-  border: '1px solid #0f172a',
-  background: '#0f172a',
-  color: '#ffffff',
-  cursor: 'pointer',
-};
-
-const priorityBoxStyle: React.CSSProperties = {
-  border: '1px solid #e2e8f0',
-  borderRadius: '10px',
-  padding: '12px',
-  marginBottom: '12px',
-  background: '#fff',
-};
-
-const priorityHeaderStyle: React.CSSProperties = {
-  display: 'flex',
-  justifyContent: 'space-between',
-  gap: '12px',
-  marginBottom: '8px',
-};
-
-const priorityTextStyle: React.CSSProperties = {
-  margin: 0,
-  color: '#334155',
-  lineHeight: 1.5,
-};
