@@ -200,7 +200,7 @@ type DownloadRoadmapButtonProps = {
   submissionId: string;
 };
 
-export function DownloadRoadmapButton({
+function DownloadRoadmapButton({
   submissionId,
 }: DownloadRoadmapButtonProps) {
   const handleDownload = () => {

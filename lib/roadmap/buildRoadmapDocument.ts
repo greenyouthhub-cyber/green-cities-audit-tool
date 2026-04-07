@@ -13,7 +13,7 @@ import {
 } from 'docx';
 import type { RoadmapDocumentData } from './getRoadmapData';
 
-function heading(text: string, level: HeadingLevel = HeadingLevel.HEADING_1) {
+function heading(text: string, level = HeadingLevel.HEADING_1) {
   return new Paragraph({
     text,
     heading: level,
