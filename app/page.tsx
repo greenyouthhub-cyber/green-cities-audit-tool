@@ -1,8 +1,8 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import Image from 'next/image';
-import { Camera, MapPin, X } from 'lucide-react';
+import { Camera, MapPin, X, Download } from 'lucide-react';
 import { supabase } from '@/lib/supabaseClient';
 import { avg } from '@/lib/score';
 import { Button } from '@/components/Button';
@@ -17,6 +17,9 @@ import {
 } from '@/components/Card';
 import { Label } from '@/components/Label';
 import { Progress } from '@/components/Progress';
+import jsPDF from 'jspdf';
+import { GeocoderAutocomplete } from '@geoapify/geocoder-autocomplete';
+import '@geoapify/geocoder-autocomplete/styles/minimal.css';
 
 type AgeGroup = '16-22' | '23-30' | '';
 type BlockKey =
@@ -59,6 +62,7 @@ type BlockState = {
   problemImage: File | null;
   goodPracticeImage: File | null;
   locationName: string;
+  googleMapsUrl: string;
   latitude: string;
   longitude: string;
 };
@@ -318,6 +322,7 @@ const blockConfig: Record<BlockKey, BlockConfig> = {
       'Are there containers available in your city to collect different types of waste? (Containers Available, Clarity)',
       'Urban cleanliness and street cleaning services (waste collection, street cleaning, prevention of litter)',
       'Reuse and repair (recycling centres, services, initiatives)',
+      'How would you evaluate the information provided to citizens about waste separation (signage on containers, awareness campaigns, guidelines or regulations) [1.1][2.1]',
     ],
     problem16: {
       mode: 'single',
@@ -473,6 +478,7 @@ function emptyBlock(): BlockState {
     problemImage: null,
     goodPracticeImage: null,
     locationName: '',
+    googleMapsUrl: '',
     latitude: '',
     longitude: '',
   };
@@ -505,7 +511,7 @@ export default function HomePage() {
   const [step, setStep] = useState<Step>('home');
   const [consent, setConsent] = useState<boolean | null>(null);
   const [loading, setLoading] = useState(false);
-
+const [blockError, setBlockError] = useState<Record<string, string>>({});
   const [profile, setProfile] = useState<Profile>({
     email: '',
     city: '',
@@ -517,6 +523,62 @@ export default function HomePage() {
     means: [],
     meansOther: '',
   });
+
+const [profileError, setProfileError] = useState('');
+const autocompleteRefs = useRef<Record<string, HTMLDivElement | null>>({});
+const getBlockValidationMessage = (block: BlockKey) => {
+  const cfg = blockConfig[block];
+  const state = blocks[block];
+  const isOlder = profile.ageGroup === '23-30';
+  const questions = isOlder ? cfg.questions23 : cfg.questions16;
+
+  const missingLikert = questions.some(
+    (_, idx) => typeof state.scores[idx] !== 'number'
+  );
+
+  if (missingLikert) {
+    return 'Please complete all required rating questions before continuing.';
+  }
+
+  if (!isOlder) {
+    if (cfg.problem16?.mode === 'single' && !state.mainProblemSingle) {
+      return 'Please answer the required selection question before continuing.';
+    }
+
+    if (
+      cfg.problem16?.mode === 'multiple' &&
+      (!state.mainProblemMultiple || state.mainProblemMultiple.length === 0)
+    ) {
+      return 'Please select at least one option before continuing.';
+    }
+
+    const needsOtherTextSingle =
+      state.mainProblemSingle === 'Other' || state.mainProblemSingle === 'Others';
+
+    const needsOtherTextMultiple =
+      state.mainProblemMultiple.includes('Other') ||
+      state.mainProblemMultiple.includes('Others');
+
+    if (
+      (needsOtherTextSingle || needsOtherTextMultiple) &&
+      !state.mainProblemOtherText.trim()
+    ) {
+      return 'Please specify the “Other” option before continuing.';
+    }
+  }
+
+  if (isOlder) {
+    if (cfg.policy23 && !state.policyAwareness) {
+      return 'Please answer the policy question before continuing.';
+    }
+
+    if (cfg.policyApplication23 && typeof state.policyApplication !== 'number') {
+      return 'Please rate the policy application question before continuing.';
+    }
+  }
+
+  return '';
+};
 
   const [blocks, setBlocks] = useState<Record<BlockKey, BlockState>>({
     urban: emptyBlock(),
@@ -559,7 +621,8 @@ export default function HomePage() {
   const strengths = [...blockScores]
     .filter((b) => b.avg > 0)
     .sort((a, b) => b.avg - a.avg)
-    .slice(0, 2);
+    .slice(-2)
+    .reverse();
 
   const scoresSummary = {
     urban: blockScores.find((b) => b.key === 'urban')?.avg || 0,
@@ -602,6 +665,68 @@ export default function HomePage() {
     return Math.round((steps.indexOf(step) / (steps.length - 1)) * 100);
   }, [step]);
 
+  const isValidEmail = (value: string) =>
+    /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
+
+  const isProfileValid =
+  isValidEmail(profile.email) &&
+  profile.city.trim() !== '' &&
+  profile.neighbourhood.trim() !== '' &&
+  profile.country.trim() !== '' &&
+  (profile.country !== 'Other' || profile.countryOther.trim() !== '') &&
+  profile.frequency.trim() !== '' &&
+  profile.ageGroup !== '' &&
+  profile.means.length > 0 &&
+  (!profile.means.includes('Other') || profile.meansOther.trim() !== '');
+
+  const isBlockValid = (block: BlockKey) => {
+  const cfg = blockConfig[block];
+  const state = blocks[block];
+  const isOlder = profile.ageGroup === '23-30';
+  const questions = isOlder ? cfg.questions23 : cfg.questions16;
+
+  const allLikertAnswered = questions.every(
+    (_, idx) => typeof state.scores[idx] === 'number'
+  );
+
+  if (!allLikertAnswered) return false;
+
+  if (!isOlder) {
+    if (cfg.problem16?.mode === 'single' && !state.mainProblemSingle) return false;
+
+    if (
+      cfg.problem16?.mode === 'multiple' &&
+      (!state.mainProblemMultiple || state.mainProblemMultiple.length === 0)
+    ) {
+      return false;
+    }
+
+    const needsOtherTextSingle =
+      state.mainProblemSingle === 'Other' || state.mainProblemSingle === 'Others';
+
+    const needsOtherTextMultiple =
+      state.mainProblemMultiple.includes('Other') ||
+      state.mainProblemMultiple.includes('Others');
+
+    if (
+      (needsOtherTextSingle || needsOtherTextMultiple) &&
+      !state.mainProblemOtherText.trim()
+    ) {
+      return false;
+    }
+  }
+
+  if (isOlder) {
+    if (cfg.policy23 && !state.policyAwareness) return false;
+
+    if (cfg.policyApplication23 && typeof state.policyApplication !== 'number') {
+      return false;
+    }
+  }
+
+  return true;
+};
+
   const updateBlock = (block: BlockKey, patch: Partial<BlockState>) => {
     setBlocks((prev) => ({
       ...prev,
@@ -629,8 +754,7 @@ export default function HomePage() {
           longitude: String(position.coords.longitude),
         });
       },
-      (error) => {
-        console.error(error);
+      () => {
         alert('Location could not be obtained. Please allow location access in your browser.');
       },
       {
@@ -641,7 +765,223 @@ export default function HomePage() {
     );
   };
 
-  const uploadImage = async (
+
+  useEffect(() => {
+  if (!orderedBlocks.includes(step as BlockKey)) return;
+
+  const block = step as BlockKey;
+  const container = autocompleteRefs.current[block];
+  if (!container) return;
+
+  container.innerHTML = '';
+
+  const apiKey = process.env.NEXT_PUBLIC_GEOAPIFY_API_KEY;
+  if (!apiKey) {
+    console.error('Missing NEXT_PUBLIC_GEOAPIFY_API_KEY');
+    return;
+  }
+
+  const autocomplete = new GeocoderAutocomplete(container, apiKey, {
+    placeholder: 'Search place...',
+    lang: 'en',
+    limit: 5,
+  });
+
+  autocomplete.on('select', (feature: any) => {
+    const props = feature?.properties;
+    const coords = feature?.geometry?.coordinates;
+
+    updateBlock(block, {
+      locationName:
+        props?.formatted ||
+        props?.address_line1 ||
+        props?.name ||
+        '',
+      latitude: coords?.[1] != null ? String(coords[1]) : '',
+      longitude: coords?.[0] != null ? String(coords[0]) : '',
+    });
+  });
+
+  return () => {
+    container.innerHTML = '';
+  };
+}, [step]);
+
+const loadImageAsDataUrl = (src: string): Promise<string> =>
+  new Promise((resolve, reject) => {
+    const img = new window.Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = img.width;
+      canvas.height = img.height;
+      const ctx = canvas.getContext('2d');
+
+      if (!ctx) {
+        reject(new Error('Canvas context not available'));
+        return;
+      }
+
+      ctx.drawImage(img, 0, 0);
+      resolve(canvas.toDataURL('image/png'));
+    };
+    img.onerror = reject;
+    img.src = src;
+  });
+
+  
+ const downloadSummary = async () => {
+  const doc = new jsPDF();
+
+  const finalCountry =
+    profile.country === 'Other' && profile.countryOther.trim()
+      ? profile.countryOther.trim()
+      : profile.country;
+
+  const logoGreen = await loadImageAsDataUrl('/GreenYouth.png');
+  const logoEU = await loadImageAsDataUrl('/uew.png');
+
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const pageHeight = doc.internal.pageSize.getHeight();
+  const margin = 14;
+  let y = 20;
+
+  const addPageHeader = () => {
+    doc.setFillColor(16, 71, 47);
+    doc.rect(0, 0, pageWidth, 32, 'F');
+
+    doc.addImage(logoGreen, 'PNG', 14, 6, 35, 10);
+    doc.addImage(logoEU, 'PNG', pageWidth - 40, 6, 30, 10);
+
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(18);
+    doc.setFont('helvetica', 'bold');
+    doc.text('Green Cities Audit Summary', pageWidth / 2, 18, { align: 'center' });
+
+    doc.setTextColor(0, 0, 0);
+    y = 42;
+  };
+
+  const checkPageBreak = (needed = 12) => {
+    if (y + needed > pageHeight - 20) {
+      doc.addPage();
+      addPageHeader();
+    }
+  };
+
+  const addSectionTitle = (title: string) => {
+    checkPageBreak(14);
+    doc.setFillColor(240, 247, 242);
+    doc.roundedRect(margin, y - 5, pageWidth - margin * 2, 10, 2, 2, 'F');
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(13);
+    doc.setTextColor(16, 71, 47);
+    doc.text(title, margin + 4, y + 2);
+    doc.setTextColor(0, 0, 0);
+    y += 12;
+  };
+
+  const addParagraph = (text: string, fontSize = 11) => {
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(fontSize);
+    const lines = doc.splitTextToSize(text, pageWidth - margin * 2);
+    checkPageBreak(lines.length * 6 + 4);
+    doc.text(lines, margin, y);
+    y += lines.length * 6 + 4;
+  };
+
+  const addInfoBox = (label: string, value: string) => {
+    checkPageBreak(16);
+    doc.setDrawColor(220, 228, 223);
+    doc.roundedRect(margin, y - 4, pageWidth - margin * 2, 12, 2, 2);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(11);
+    doc.text(`${label}:`, margin + 4, y + 3);
+    doc.setFont('helvetica', 'normal');
+    doc.text(value || '-', margin + 34, y + 3);
+    y += 16;
+  };
+
+  const addRoadmapCard = (
+    title: string,
+    score: string,
+    shortTerm: string,
+    mediumTerm: string
+  ) => {
+    const shortLines = doc.splitTextToSize(`Short-term: ${shortTerm}`, 170);
+    const mediumLines = doc.splitTextToSize(`Medium-term: ${mediumTerm}`, 170);
+    const titleLines = doc.splitTextToSize(title, 170);
+
+    const boxHeight =
+      10 + titleLines.length * 5 + shortLines.length * 5 + mediumLines.length * 5 + 10;
+
+    checkPageBreak(boxHeight);
+
+    doc.setDrawColor(200, 220, 205);
+    doc.setFillColor(250, 252, 250);
+    doc.roundedRect(margin, y - 4, pageWidth - margin * 2, boxHeight, 3, 3, 'FD');
+
+    let innerY = y + 2;
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(11);
+    doc.text(titleLines, margin + 4, innerY);
+
+    innerY += titleLines.length * 5 + 2;
+    doc.setFont('helvetica', 'normal');
+    doc.text(`Score: ${score}`, margin + 4, innerY);
+
+    innerY += 6;
+    doc.text(shortLines, margin + 4, innerY);
+
+    innerY += shortLines.length * 5 + 2;
+    doc.text(mediumLines, margin + 4, innerY);
+
+    y += boxHeight + 6;
+  };
+
+  addPageHeader();
+
+  addSectionTitle('General Information');
+  addInfoBox('City', profile.city || '-');
+  addInfoBox('Country', finalCountry || '-');
+  addInfoBox('Overall score', `${overallScore || '-'} / 5`);
+  addInfoBox('Overall result', overallCategory || '-');
+
+  addSectionTitle('Interpretation');
+  addParagraph(overallDescription || '-');
+
+  addSectionTitle('Priority Areas');
+  if (priorityAreas.length) {
+    priorityAreas.forEach((item, idx) => {
+      addParagraph(`${idx + 1}. ${item.title} — Score: ${item.avg} (${item.label})`);
+    });
+  } else {
+    addParagraph('No priority areas detected.');
+  }
+
+  addSectionTitle('Suggested Roadmap');
+  if (suggestedRoadmap.length) {
+    suggestedRoadmap.forEach((item, idx) => {
+      addRoadmapCard(
+        `Priority ${idx + 1}: ${item.title}`,
+        `${item.score} (${item.label})`,
+        item.short_term_action,
+        item.medium_term_action
+      );
+    });
+  } else {
+    addParagraph('No roadmap generated yet.');
+  }
+
+  addSectionTitle('Scores by Area');
+  blockScores.forEach((b) => {
+    addParagraph(`${b.title}: ${b.avg || 0} / 5 (${b.label})`);
+  });
+
+  doc.save(`green-cities-summary-${profile.city || 'city'}.pdf`);
+};
+      const uploadImage = async (
     file: File,
     submissionId: string,
     block: BlockKey,
@@ -659,16 +999,18 @@ export default function HomePage() {
     try {
       setLoading(true);
 
+      const finalCountry =
+        profile.country === 'Other' && profile.countryOther.trim()
+          ? `Other: ${profile.countryOther.trim()}`
+          : profile.country || null;
+
       const { data: submission, error: submissionError } = await supabase
         .from('submissions')
         .insert({
           email: profile.email,
           city: profile.city,
           neighbourhood: profile.neighbourhood,
-          country:
-            profile.country === 'Other' && profile.countryOther.trim()
-              ? `Other: ${profile.countryOther.trim()}`
-              : profile.country,
+          country: finalCountry,
           frequency: profile.frequency,
           age_group: profile.ageGroup,
           consent_accepted: consent ?? false,
@@ -689,46 +1031,42 @@ export default function HomePage() {
         .select()
         .single();
 
-      if (submissionError) throw submissionError;
+      if (submissionError) throw new Error(`submissions: ${submissionError.message}`);
 
       if (suggestedRoadmap.length > 0) {
-  const roadmapRows = suggestedRoadmap.map((item, index) => ({
-    submission_id: submission.id,
-    city: index === 0 ? profile.city || null : null,
-    country:
-      index === 0
-        ? profile.country === 'Other' && profile.countryOther.trim()
-          ? `Other: ${profile.countryOther.trim()}`
-          : profile.country || null
-        : null,
-    overall_score: index === 0 ? overallScore || null : null,
-    priority_areas:
-      index === 0
-        ? priorityAreas.length > 0
-          ? priorityAreas.map((p, i) => `Priority ${i + 1}: ${p.title}`).join(' | ')
-          : null
-        : null,
-    roadmap_text:
-      `Priority ${index + 1}: ${item.title}. ` +
-      `According to the audit results, this area should be addressed as part of the city’s short- and medium-term sustainability strategy. ` +
-      `In the short term, it is recommended to: ${item.short_term_action} ` +
-      `In the medium term, it is recommended to: ${item.medium_term_action}`,
-    roadmap_pdf_url: null,
-    priority_order: index + 1,
-    area: item.area,
-    title: item.title,
-    score: item.score,
-    label: item.label,
-    short_term_action: item.short_term_action,
-    medium_term_action: item.medium_term_action,
-  }));
+        const roadmapRows = suggestedRoadmap.map((item, index) => ({
+          submission_id: submission.id,
+          city: index === 0 ? profile.city || null : null,
+          country: index === 0 ? finalCountry : null,
+          overall_score: index === 0 ? overallScore || null : null,
+          priority_areas:
+            index === 0
+              ? priorityAreas.length > 0
+                ? priorityAreas.map((p, i) => `Priority ${i + 1}: ${p.title}`).join(' | ')
+                : null
+              : null,
+          roadmap_text:
+            `Priority ${index + 1}: ${item.title}. ` +
+            `According to the audit results, this area should be addressed as part of the city’s short- and medium-term sustainability strategy. ` +
+            `In the short term, it is recommended to: ${item.short_term_action} ` +
+            `In the medium term, it is recommended to: ${item.medium_term_action}`,
+          roadmap_pdf_url: null,
+          priority_order: index + 1,
+          area: item.area,
+          title: item.title,
+          score: item.score,
+          label: item.label,
+          short_term_action: item.short_term_action,
+          medium_term_action: item.medium_term_action,
+        }));
 
-  const { error: roadmapError } = await supabase
-    .from('roadmaps')
-    .insert(roadmapRows);
+        const { error: roadmapError } = await supabase
+          .from('roadmaps')
+          .insert(roadmapRows);
 
-  if (roadmapError) throw roadmapError;
-}
+        if (roadmapError) throw new Error(`roadmaps: ${roadmapError.message}`);
+      }
+
       if (profile.means.length) {
         const meansRows = profile.means.map((m) => ({
           submission_id: submission.id,
@@ -738,8 +1076,78 @@ export default function HomePage() {
               : m,
         }));
         const { error: meansError } = await supabase.from('submission_means').insert(meansRows);
-        if (meansError) throw meansError;
+        if (meansError) throw new Error(`submission_means: ${meansError.message}`);
       }
+
+      const getBlockPrefix = (block: BlockKey) => {
+        if (block === 'urban') return 'A';
+        if (block === 'mobility') return 'B';
+        if (block === 'waste') return 'C';
+        if (block === 'energy') return 'D';
+        if (block === 'pollution') return 'E';
+        if (block === 'governance') return 'F';
+        return 'X';
+      };
+
+      const getIndicatorNamesForBlock = (blockName: string) => {
+        const upper = blockName.toUpperCase();
+
+        if (upper.includes('URBAN DESIGN')) {
+          return [
+            'Shade and climate comfort in public spaces',
+            'Quality and continuity of sidewalks and pedestrian routes',
+            'Accessibility and maintenance of green areas',
+            'Universal accessibility',
+          ];
+        }
+
+        if (upper.includes('SUSTAINABLE MOBILITY')) {
+          return [
+            'Public transport availability',
+            'Cycling infrastructure',
+            'Road safety',
+            'Connections between transport options',
+          ];
+        }
+
+        if (upper.includes('WASTE')) {
+          return [
+            'Availability and clarity of waste containers',
+            'Urban cleanliness and street cleaning services',
+            'Reuse and repair initiatives',
+            'Information for citizens about waste separation',
+          ];
+        }
+
+        if (upper.includes('INFRASTRUCTURE') || upper.includes('ENERGY')) {
+          return [
+            'Efficiency of public lighting and energy equipment',
+            'Visible use of sustainable energy sources',
+            'Quality of public lighting at night',
+            'Additional infrastructure / energy indicator',
+          ];
+        }
+
+        if (upper.includes('POLLUTION')) {
+          return [
+            'Noise level',
+            'Air quality',
+            'Water quality in rivers/lakes',
+            'Additional pollution indicator',
+          ];
+        }
+
+        if (upper.includes('ACCESS TO SERVICES') || upper.includes('GOVERNANCE')) {
+          return [
+            'Access to essential services without a car',
+            'Quality of public information by local authorities',
+            'Opportunities for youth participation',
+            'Additional governance indicator',
+          ];
+        }
+
+        return ['Indicator 1', 'Indicator 2', 'Indicator 3', 'Indicator 4'];
+      };
 
       for (const block of orderedBlocks) {
         const state = blocks[block];
@@ -748,6 +1156,8 @@ export default function HomePage() {
           submission_id: submission.id,
           block_name: block,
           age_group: profile.ageGroup || null,
+          country: finalCountry,
+          city: profile.city || null,
 
           q1_score: state.scores[0] || null,
           q1_text: state.explanations[0] || null,
@@ -800,7 +1210,38 @@ export default function HomePage() {
           .from('block_responses')
           .insert(blockInsert);
 
-        if (blockResponseError) throw blockResponseError;
+        if (blockResponseError) throw new Error(`block_responses: ${blockResponseError.message}`);
+
+        const blockPrefix = getBlockPrefix(block);
+        const indicatorNames = getIndicatorNamesForBlock(blockConfig[block].title);
+
+        const itemRows = state.scores
+          .map((score, index) => {
+            const numericScore = typeof score === 'number' ? score : null;
+            if (numericScore === null) return null;
+
+            return {
+              submission_id: submission.id,
+              block_name: block,
+              item_code: `${blockPrefix}${index + 1}`,
+              item_question: indicatorNames[index] || `Indicator ${index + 1}`,
+              item_order: index + 1,
+              score: numericScore,
+              explanation: state.explanations[index] || null,
+              city: profile.city || null,
+              country: finalCountry,
+              age_group: profile.ageGroup || null,
+            };
+          })
+          .filter(Boolean);
+
+        if (itemRows.length) {
+          const { error: itemError } = await supabase
+            .from('item_responses')
+            .insert(itemRows);
+
+          if (itemError) throw new Error(`item_responses: ${itemError.message}`);
+        }
 
         const mediaRows: Array<{
           submission_id: string;
@@ -824,7 +1265,7 @@ export default function HomePage() {
             block_name: block,
             media_type: 'problem',
             image_url: problemUrl,
-            location_name: state.locationName || null,
+            location_name: state.locationName || state.googleMapsUrl || null,
             latitude: state.latitude ? Number(state.latitude) : null,
             longitude: state.longitude ? Number(state.longitude) : null,
           });
@@ -842,7 +1283,7 @@ export default function HomePage() {
             block_name: block,
             media_type: 'good_practice',
             image_url: goodPracticeUrl,
-            location_name: state.locationName || null,
+            location_name: state.locationName || state.googleMapsUrl || null,
             latitude: state.latitude ? Number(state.latitude) : null,
             longitude: state.longitude ? Number(state.longitude) : null,
           });
@@ -852,14 +1293,19 @@ export default function HomePage() {
           const { error: mediaError } = await supabase
             .from('media_evidence')
             .insert(mediaRows);
-          if (mediaError) throw mediaError;
+          if (mediaError) throw new Error(`media_evidence: ${mediaError.message}`);
         }
       }
 
       setStep('thanks');
-    } catch (e) {
-      console.error(e);
-      alert('Error saving submission. Open browser console and check the exact Supabase error.');
+    } catch (e: any) {
+      console.error('RAW ERROR:', e);
+      alert(
+        e?.message ||
+          e?.details ||
+          e?.hint ||
+          'Error saving submission'
+      );
     } finally {
       setLoading(false);
     }
@@ -880,7 +1326,7 @@ export default function HomePage() {
 
     return (
       <div className="rounded-2xl border p-4 space-y-4">
-        <Label>{cfg.problem16.label}</Label>
+        <Label>{cfg.problem16.label} *</Label>
 
         {cfg.problem16.mode === 'single' ? (
           <div className="grid gap-3">
@@ -923,7 +1369,7 @@ export default function HomePage() {
 
         {showOtherInput && (
           <div className="mt-3">
-            <Label>Please specify</Label>
+            <Label>Please specify *</Label>
             <Input
               value={state.mainProblemOtherText}
               onChange={(e) =>
@@ -953,7 +1399,7 @@ export default function HomePage() {
         <CardContent className="space-y-6">
           {questions.map((question, idx) => (
             <div key={idx} className="rounded-2xl border p-4 space-y-3">
-              <Label>{question}</Label>
+              <Label>{question} *</Label>
               <p className="text-sm text-slate-500">{SCALE_HELP}</p>
 
               <ScoreButtons
@@ -994,7 +1440,7 @@ export default function HomePage() {
 
           {isOlder && cfg.policy23 && (
             <div className="rounded-2xl border p-4 space-y-4">
-              <Label>{cfg.policy23}</Label>
+              <Label>{cfg.policy23} *</Label>
               <div className="grid gap-3">
                 {['Yes', 'No', "I’m not sure"].map((option) => (
                   <label key={option} className="flex items-center gap-2 text-sm">
@@ -1013,7 +1459,7 @@ export default function HomePage() {
 
           {isOlder && cfg.policyApplication23 && (
             <div className="rounded-2xl border p-4 space-y-3">
-              <Label>{cfg.policyApplication23}</Label>
+              <Label>{cfg.policyApplication23} *</Label>
               <p className="text-sm text-slate-500">
                 Scale reference: 1 = not applied / very poor · 5 = applied consistently and
                 effectively
@@ -1125,6 +1571,19 @@ export default function HomePage() {
                 </div>
               </div>
 
+              <div className="space-y-2">
+  <Label>Search place</Label>
+  <div
+    ref={(el) => {
+      autocompleteRefs.current[block] = el;
+    }}
+    className="rounded-xl border border-slate-300 px-3 py-2"
+    style={{ position: 'relative' }}
+  />
+  <p className="text-xs text-slate-500">
+    Search for a place and select it from the suggestions.
+  </p>
+</div>
               <div className="grid md:grid-cols-2 gap-4">
                 <div>
                   <Label>Latitude</Label>
@@ -1139,6 +1598,19 @@ export default function HomePage() {
             </div>
           </div>
 
+          {!isBlockValid(block) && (
+            <p className="text-sm text-amber-700">
+              Please complete all required scores and selection questions before continuing.
+            </p>
+          )}
+
+          {blockError[block] && (
+  <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+    {blockError[block]}
+  </div>
+)}
+
+
           <div className="flex justify-between">
             <Button
               variant="outline"
@@ -1152,14 +1624,28 @@ export default function HomePage() {
             </Button>
 
             <Button
-              onClick={() => {
-                const index = orderedBlocks.indexOf(block);
-                if (index === orderedBlocks.length - 1) setStep('summary');
-                else setStep(orderedBlocks[index + 1]);
-              }}
-            >
-              Continue
-            </Button>
+  onClick={() => {
+    if (!isBlockValid(block)) {
+      setBlockError((prev) => ({
+        ...prev,
+        [block]: getBlockValidationMessage(block),
+      }));
+      return;
+    }
+
+    setBlockError((prev) => ({
+      ...prev,
+      [block]: '',
+    }));
+
+    const index = orderedBlocks.indexOf(block);
+    if (index === orderedBlocks.length - 1) setStep('summary');
+    else setStep(orderedBlocks[index + 1]);
+  }}
+>
+  Continue
+</Button>
+
           </div>
         </CardContent>
       </Card>
@@ -1284,16 +1770,19 @@ export default function HomePage() {
             </CardHeader>
 
             <CardContent className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <Label>Email</Label>
-                <Input
-                  value={profile.email}
-                  onChange={(e) => setProfile({ ...profile, email: e.target.value })}
-                />
-              </div>
+                  <div>
+  <Label>Email *</Label>
+  <Input
+    type="email"
+    required
+    value={profile.email}
+    onChange={(e) => setProfile({ ...profile, email: e.target.value })}
+    placeholder="name@example.com"
+  />
+</div>
 
               <div>
-                <Label>City</Label>
+                <Label>City *</Label>
                 <Input
                   value={profile.city}
                   onChange={(e) => setProfile({ ...profile, city: e.target.value })}
@@ -1301,7 +1790,7 @@ export default function HomePage() {
               </div>
 
               <div>
-                <Label>Area / Neighbourhood</Label>
+                <Label>Area / Neighbourhood *</Label>
                 <Input
                   value={profile.neighbourhood}
                   onChange={(e) => setProfile({ ...profile, neighbourhood: e.target.value })}
@@ -1309,7 +1798,7 @@ export default function HomePage() {
               </div>
 
               <div>
-                <Label>Country</Label>
+                <Label>Country *</Label>
                 <select
                   className="w-full rounded-xl border border-slate-300 px-3 py-2"
                   value={profile.country}
@@ -1325,7 +1814,7 @@ export default function HomePage() {
 
                 {profile.country === 'Other' && (
                   <div className="mt-3">
-                    <Label>Please specify country</Label>
+                    <Label>Please specify country *</Label>
                     <Input
                       value={profile.countryOther}
                       onChange={(e) => setProfile({ ...profile, countryOther: e.target.value })}
@@ -1336,7 +1825,7 @@ export default function HomePage() {
               </div>
 
               <div>
-                <Label>How often do you go around town?</Label>
+                <Label>How often do you go around town? *</Label>
                 <select
                   className="w-full rounded-xl border border-slate-300 px-3 py-2"
                   value={profile.frequency}
@@ -1352,7 +1841,7 @@ export default function HomePage() {
               </div>
 
               <div>
-                <Label>Age group</Label>
+                <Label>Age group *</Label>
                 <div className="flex gap-4 pt-2">
                   <label className="flex items-center gap-2">
                     <input
@@ -1374,7 +1863,7 @@ export default function HomePage() {
               </div>
 
               <div className="md:col-span-2">
-                <Label>Usual means</Label>
+                <Label>Usual means *</Label>
                 <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
                   {meansOptions.map((m) => (
                     <label key={m} className="border rounded-xl p-3 flex gap-2 items-center">
@@ -1397,7 +1886,7 @@ export default function HomePage() {
 
                 {profile.means.includes('Other') && (
                   <div className="mt-3">
-                    <Label>Please specify other means</Label>
+                    <Label>Please specify other means *</Label>
                     <Input
                       value={profile.meansOther}
                       onChange={(e) => setProfile({ ...profile, meansOther: e.target.value })}
@@ -1406,17 +1895,41 @@ export default function HomePage() {
                   </div>
                 )}
               </div>
-
+                  {profileError && (
+  <div className="md:col-span-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+    {profileError}
+  </div>
+)}
               <div className="md:col-span-2 flex gap-3">
                 <Button variant="outline" onClick={() => setStep('consent')}>
                   Back
                 </Button>
-                <Button
-                  onClick={() => setStep('urban')}
-                  disabled={!profile.city || !profile.country || !profile.ageGroup}
-                >
-                  Continue
-                </Button>
+ <Button
+  onClick={() => {
+    if (!profile.email.trim()) {
+      setProfileError('Please enter your email address.');
+      return;
+    }
+
+    if (!isValidEmail(profile.email)) {
+      setProfileError('Please enter a valid email address.');
+      return;
+    }
+
+    if (!isProfileValid) {
+      setProfileError(
+        'Please complete all required fields in this section before continuing.'
+      );
+      return;
+    }
+
+    setProfileError('');
+    setStep('urban');
+  }}
+>
+  Continue
+</Button>
+
               </div>
             </CardContent>
           </Card>
@@ -1544,10 +2057,16 @@ export default function HomePage() {
                 </div>
               </div>
 
-              <div className="flex gap-3">
+              <div className="flex gap-3 flex-wrap">
                 <Button variant="outline" onClick={() => setStep('governance')}>
                   Back
                 </Button>
+
+                <Button variant="outline" onClick={downloadSummary}>
+                  <Download className="h-4 w-4 mr-2" />
+                  Download summary
+                </Button>
+
                 <Button onClick={submitAll} disabled={loading}>
                   {loading ? 'Saving…' : 'Submit'}
                 </Button>
@@ -1566,7 +2085,7 @@ export default function HomePage() {
                   : 'Submission completed.'}
               </CardDescription>
             </CardHeader>
-            <CardContent>
+           <CardContent>
               <Button onClick={() => setStep('home')}>Start again</Button>
             </CardContent>
           </Card>

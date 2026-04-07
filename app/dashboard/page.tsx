@@ -29,6 +29,21 @@ import {
   RefreshCw,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/Card';
+import Link from 'next/link';
+import Image from 'next/image';
+
+type ItemResponseRow = {
+  submission_id: string;
+  block_name: string;
+  item_code: string;
+  item_question: string;
+  item_order: number;
+  score: number | null;
+  explanation: string | null;
+  age_group: string | null;
+  country?: string | null;
+  city?: string | null;
+};
 
 type SubmissionRow = {
   id: string;
@@ -181,6 +196,27 @@ function downloadCSV(filename: string, rows: Record<string, string | number | nu
   URL.revokeObjectURL(url);
 }
 
+type DownloadRoadmapButtonProps = {
+  submissionId: string;
+};
+
+export function DownloadRoadmapButton({
+  submissionId,
+}: DownloadRoadmapButtonProps) {
+  const handleDownload = () => {
+    window.open(`/api/roadmap/${submissionId}/word`, '_blank');
+  };
+
+  return (
+    <button
+      onClick={handleDownload}
+      className="rounded-xl px-4 py-2 bg-green-700 text-white"
+    >
+      Download Word Roadmap
+    </button>
+  );
+}
+
 function groupCounts(items: string[]) {
   const counts: Record<string, number> = {};
   items.forEach((item) => {
@@ -308,6 +344,7 @@ function BasicTable({
 export default function DashboardPage() {
   const [submissions, setSubmissions] = useState<SubmissionRow[]>([]);
   const [blockResponses, setBlockResponses] = useState<BlockResponseRow[]>([]);
+  const [itemResponses, setItemResponses] = useState<ItemResponseRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -321,6 +358,7 @@ export default function DashboardPage() {
         setLoading(true);
         setError(null);
 
+        
         const submissionsRes = await supabase
           .from('submissions')
           .select('id, city, country, age_group, overall_score, overall_result, created_at')
@@ -334,8 +372,19 @@ export default function DashboardPage() {
 
         if (blocksRes.error) throw blocksRes.error;
 
-        setSubmissions((submissionsRes.data || []) as SubmissionRow[]);
-        setBlockResponses((blocksRes.data || []) as BlockResponseRow[]);
+        const itemsRes = await supabase
+  .from('item_responses')
+  .select(
+    'submission_id, block_name, item_code, item_question, item_order, score, explanation, age_group, country, city'
+  );
+
+if (itemsRes.error) throw itemsRes.error;
+
+setSubmissions((submissionsRes.data || []) as SubmissionRow[]);
+setBlockResponses((blocksRes.data || []) as BlockResponseRow[]);
+setItemResponses((itemsRes.data || []) as ItemResponseRow[]);
+4
+        
       } catch (err: any) {
         console.error('DASHBOARD LOAD ERROR FULL:', JSON.stringify(err, null, 2));
         console.error('DASHBOARD LOAD ERROR RAW:', err);
@@ -369,6 +418,7 @@ export default function DashboardPage() {
     [submissions]
   );
 
+ 
   const filteredSubmissions = useMemo(() => {
     return submissions.filter((s) => {
       const normalizedAge = normalizeAgeGroup(s.age_group);
@@ -381,6 +431,21 @@ export default function DashboardPage() {
 
   const filteredSubmissionIds = useMemo(() => new Set(filteredSubmissions.map((s) => s.id)), [filteredSubmissions]);
 
+  const filteredItemResponses = useMemo(() => {
+  return itemResponses.filter((row) => {
+    if (!filteredSubmissionIds.has(row.submission_id)) return false;
+
+    const normalizedAge = normalizeAgeGroup(row.age_group);
+    const matchesCountry = countryFilter === 'All' || safeLabel(row.country) === countryFilter;
+    const matchesCity = cityFilter === 'All' || safeLabel(row.city) === cityFilter;
+    const matchesAge = ageFilter === 'All' || normalizedAge === ageFilter;
+
+    return matchesCountry && matchesCity && matchesAge;
+  });
+}, [itemResponses, filteredSubmissionIds, countryFilter, cityFilter, ageFilter]);
+
+
+
   const filteredBlockResponses = useMemo(() => {
     return blockResponses.filter((b) => {
       if (!filteredSubmissionIds.has(b.submission_id)) return false;
@@ -391,6 +456,9 @@ export default function DashboardPage() {
       return matchesCountry && matchesCity && matchesAge;
     });
   }, [blockResponses, filteredSubmissionIds, countryFilter, cityFilter, ageFilter]);
+
+  
+
 
   const totalResponses = filteredSubmissions.length;
   const countriesRepresented = useMemo(() => new Set(filteredSubmissions.map((s) => safeLabel(s.country))).size, [filteredSubmissions]);
@@ -574,27 +642,180 @@ export default function DashboardPage() {
 
   const hasMapData = false;
 
-  const weakestIndicators = useMemo(() => {
-    return averageByArea.slice(0, 10).map((row) => ({
-      indicator: row.area,
-      block: 'Area-level proxy',
-      avg: row.avg,
-      count: row.count,
-    }));
-  }, [averageByArea]);
+const weakestIndicators = useMemo(() => {
+  const grouped: Record<
+    string,
+    {
+      item_code: string;
+      item_question: string;
+      block_name: string;
+      scores: number[];
+    }
+  > = {};
+
+  filteredItemResponses.forEach((row) => {
+    if (typeof row.score !== 'number') return;
+
+    const key = `${row.item_code}|||${row.item_question}`;
+
+    if (!grouped[key]) {
+      grouped[key] = {
+        item_code: row.item_code,
+        item_question: row.item_question,
+        block_name: safeLabel(row.block_name),
+        scores: [],
+      };
+    }
+
+    grouped[key].scores.push(row.score);
+  });
+
+  return Object.values(grouped)
+    .map((row) => ({
+      indicator: `${row.item_code} - ${row.item_question}`,
+      block: row.block_name,
+      avg: average(row.scores),
+      count: row.scores.length,
+    }))
+    .sort((a, b) => a.avg - b.avg)
+    .slice(0, 10);
+}, [filteredItemResponses]);
 
   const repeatedPatterns = useMemo<PatternRow[]>(() => {
-    const labels: string[] = [];
-    filteredBlockResponses.forEach((row) => {
-      if (typeof row.block_score !== 'number') return;
-      labels.push(buildPatternLabel(safeLabel(row.block_name), row.block_score));
-    });
+  const labels: string[] = [];
 
-    return groupCounts(labels)
-      .map((row) => ({ pattern: row.label, occurrences: row.count }))
-      .sort((a, b) => b.occurrences - a.occurrences)
-      .slice(0, 10);
-  }, [filteredBlockResponses]);
+  filteredItemResponses.forEach((row) => {
+    if (typeof row.score !== 'number') return;
+    labels.push(buildPatternLabel(`${row.item_code} ${row.item_question}`, row.score));
+  });
+
+  return groupCounts(labels)
+    .map((row) => ({ pattern: row.label, occurrences: row.count }))
+    .sort((a, b) => b.occurrences - a.occurrences)
+    .slice(0, 10);
+}, [filteredItemResponses]);
+
+
+const weakestIndicatorsByCity = useMemo(() => {
+  const grouped: Record<
+    string,
+    {
+      city: string;
+      item_code: string;
+      item_question: string;
+      scores: number[];
+    }
+  > = {};
+
+  filteredItemResponses.forEach((row) => {
+    if (typeof row.score !== 'number') return;
+
+    const city = safeLabel(row.city);
+    const key = `${city}|||${row.item_code}|||${row.item_question}`;
+
+    if (!grouped[key]) {
+      grouped[key] = {
+        city,
+        item_code: row.item_code,
+        item_question: row.item_question,
+        scores: [],
+      };
+    }
+
+    grouped[key].scores.push(row.score);
+  });
+
+  return Object.values(grouped)
+    .map((row) => ({
+      group: row.city,
+      indicator: `${row.item_code} - ${row.item_question}`,
+      avg: average(row.scores),
+      count: row.scores.length,
+    }))
+    .sort((a, b) => a.avg - b.avg)
+    .slice(0, 20);
+}, [filteredItemResponses]);
+
+const weakestIndicatorsByCountry = useMemo(() => {
+  const grouped: Record<
+    string,
+    {
+      country: string;
+      item_code: string;
+      item_question: string;
+      scores: number[];
+    }
+  > = {};
+
+  filteredItemResponses.forEach((row) => {
+    if (typeof row.score !== 'number') return;
+
+    const country = safeLabel(row.country);
+    const key = `${country}|||${row.item_code}|||${row.item_question}`;
+
+    if (!grouped[key]) {
+      grouped[key] = {
+        country,
+        item_code: row.item_code,
+        item_question: row.item_question,
+        scores: [],
+      };
+    }
+
+    grouped[key].scores.push(row.score);
+  });
+
+  return Object.values(grouped)
+    .map((row) => ({
+      group: row.country,
+      indicator: `${row.item_code} - ${row.item_question}`,
+      avg: average(row.scores),
+      count: row.scores.length,
+    }))
+    .sort((a, b) => a.avg - b.avg)
+    .slice(0, 20);
+}, [filteredItemResponses]);
+
+const weakestIndicatorsByAge = useMemo(() => {
+  const grouped: Record<
+    string,
+    {
+      age: string;
+      item_code: string;
+      item_question: string;
+      scores: number[];
+    }
+  > = {};
+
+  filteredItemResponses.forEach((row) => {
+    if (typeof row.score !== 'number') return;
+
+    const age = normalizeAgeGroup(row.age_group);
+    const key = `${age}|||${row.item_code}|||${row.item_question}`;
+
+    if (!grouped[key]) {
+      grouped[key] = {
+        age,
+        item_code: row.item_code,
+        item_question: row.item_question,
+        scores: [],
+      };
+    }
+
+    grouped[key].scores.push(row.score);
+  });
+
+  return Object.values(grouped)
+    .map((row) => ({
+      group: row.age,
+      indicator: `${row.item_code} - ${row.item_question}`,
+      avg: average(row.scores),
+      count: row.scores.length,
+    }))
+    .sort((a, b) => a.avg - b.avg)
+    .slice(0, 20);
+}, [filteredItemResponses]);
+
 
   const roadmapSuggestions = useMemo(() => {
     return weakestAreas.map((row, index) => ({
@@ -608,6 +829,8 @@ export default function DashboardPage() {
     }));
   }, [weakestAreas]);
 
+
+  
   const exportOverview = () => {
     downloadCSV(
       'dashboard-overview.csv',
@@ -622,6 +845,7 @@ export default function DashboardPage() {
       }))
     );
   };
+  
 
   const exportAreas = () => {
     downloadCSV(
@@ -717,6 +941,7 @@ export default function DashboardPage() {
     setAgeFilter('All');
   };
 
+
   if (loading) {
     return (
       <main className="min-h-screen bg-slate-50 p-6">
@@ -746,39 +971,79 @@ export default function DashboardPage() {
   return (
     <main className="min-h-screen bg-slate-50 p-6">
       <div className="mx-auto max-w-7xl space-y-8">
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-          <div>
-            <h1 className="text-3xl font-bold text-slate-900">Green Cities Audit Dashboard</h1>
-            <p className="mt-2 max-w-3xl text-slate-600">
-              Overview, distributions, comparisons, weakest and strongest areas, charts, timeline,
-              roadmap suggestions and exportables.
-            </p>
-          </div>
+        
+        <div className="space-y-6">
+  <div className="flex justify-center">
+    <div className="flex items-center justify-center gap-8">
+      <Image
+        src="/logo-greencities.png"
+        alt="GreenYOUth logo"
+        width={260}
+        height={90}
+        className="h-auto w-auto object-contain"
+        priority
+      />
+      <Image
+        src="/UEuropa.png"
+        alt="European Union logo"
+        width={220}
+        height={90}
+        className="h-auto w-auto object-contain"
+        priority
+      />
+    </div>
+  </div>
 
-          <div className="flex flex-wrap gap-2">
-            <button
-              onClick={exportOverview}
-              className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50"
-            >
-              <Download className="h-4 w-4" />
-              Export overview
-            </button>
-            <button
-              onClick={exportAreas}
-              className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50"
-            >
-              <Download className="h-4 w-4" />
-              Export areas
-            </button>
-            <button
-              onClick={exportRoadmap}
-              className="inline-flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-medium text-emerald-800 shadow-sm hover:bg-emerald-100"
-            >
-              <Download className="h-4 w-4" />
-              Export roadmap all cities
-            </button>
-          </div>
-        </div>
+  <div className="mx-auto max-w-3xl text-center">
+ <h1 className="text-5xl font-bold leading-tight text-[#10472f]">
+  Green Cities Audit Dashboard
+</h1>
+
+    <p className="mt-4 text-xl text-slate-600">
+      Overview of responses, scores and roadmap outputs.
+    </p>
+  </div>
+
+  <div className="flex flex-wrap justify-center gap-3">
+    <Link
+      href="/map"
+      className="rounded-xl bg-green-700 px-5 py-3 text-white font-medium hover:bg-green-800"
+    >
+      Open Evidence Map
+    </Link>
+
+    <Link
+      href="/"
+      className="rounded-xl border border-slate-300 bg-white px-5 py-3 text-slate-700 font-medium hover:bg-slate-100"
+    >
+      Back to form
+    </Link>
+
+    <button
+      onClick={exportOverview}
+      className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-5 py-3 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50"
+    >
+      <Download className="h-4 w-4" />
+      Export overview
+    </button>
+
+    <button
+      onClick={exportAreas}
+      className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-5 py-3 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50"
+    >
+      <Download className="h-4 w-4" />
+      Export areas
+    </button>
+
+    <button
+      onClick={exportRoadmap}
+      className="inline-flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-5 py-3 text-sm font-medium text-emerald-800 shadow-sm hover:bg-emerald-100"
+    >
+      <Download className="h-4 w-4" />
+      Export roadmap all cities
+    </button>
+  </div>
+</div>
 
         <Card>
           <CardHeader>
@@ -1106,12 +1371,62 @@ export default function DashboardPage() {
           <Card>
             <CardHeader><CardTitle>Weakest indicators</CardTitle></CardHeader>
             <CardContent>
-              <div className="mb-3 rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">
-                Since there is no item_responses table yet, this section uses the weakest areas as a proxy.
-              </div>
+              
               <BasicTable headers={['Indicator proxy', 'Block', 'Avg score', 'Responses']} rows={weakestIndicators.map((row) => [row.indicator, row.block, row.avg, row.count])} />
             </CardContent>
           </Card>
+          <div className="grid gap-4 xl:grid-cols-3">
+  <Card>
+    <CardHeader>
+      <CardTitle>Weakest indicators by city</CardTitle>
+    </CardHeader>
+    <CardContent>
+      <BasicTable
+        headers={['City', 'Indicator', 'Avg score', 'Responses']}
+        rows={weakestIndicatorsByCity.map((row) => [
+          row.group,
+          row.indicator,
+          row.avg,
+          row.count,
+        ])}
+      />
+    </CardContent>
+  </Card>
+
+  <Card>
+    <CardHeader>
+      <CardTitle>Weakest indicators by country</CardTitle>
+    </CardHeader>
+    <CardContent>
+      <BasicTable
+        headers={['Country', 'Indicator', 'Avg score', 'Responses']}
+        rows={weakestIndicatorsByCountry.map((row) => [
+          row.group,
+          row.indicator,
+          row.avg,
+          row.count,
+        ])}
+      />
+    </CardContent>
+  </Card>
+
+  <Card>
+    <CardHeader>
+      <CardTitle>Weakest indicators by age group</CardTitle>
+    </CardHeader>
+    <CardContent>
+      <BasicTable
+        headers={['Age group', 'Indicator', 'Avg score', 'Responses']}
+        rows={weakestIndicatorsByAge.map((row) => [
+          row.group,
+          row.indicator,
+          row.avg,
+          row.count,
+        ])}
+      />
+    </CardContent>
+  </Card>
+</div>
           <Card>
             <CardHeader><CardTitle>Repeated patterns</CardTitle></CardHeader>
             <CardContent>

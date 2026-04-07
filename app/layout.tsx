@@ -1,6 +1,7 @@
 import './globals.css';
 import type { Metadata } from 'next';
 import { Prompt } from 'next/font/google';
+import 'leaflet/dist/leaflet.css';
 
 const prompt = Prompt({
   subsets: ['latin'],
