@@ -322,7 +322,7 @@ const blockConfig: Record<BlockKey, BlockConfig> = {
       'Are there containers available in your city to collect different types of waste? (Containers Available, Clarity)',
       'Urban cleanliness and street cleaning services (waste collection, street cleaning, prevention of litter)',
       'Reuse and repair (recycling centres, services, initiatives)',
-      'How would you evaluate the information provided to citizens about waste separation (signage on containers, awareness campaigns, guidelines or regulations) [1.1][2.1]',
+      'How would you evaluate the information provided to citizens about waste separation (signage on containers, awareness campaigns, guidelines or regulations)',
     ],
     problem16: {
       mode: 'single',
@@ -773,7 +773,15 @@ const getBlockValidationMessage = (block: BlockKey) => {
   const container = autocompleteRefs.current[block];
   if (!container) return;
 
+  const state = blocks[block];
+  const hasUploadedEvidence =
+    Boolean(state.problemImage) || Boolean(state.goodPracticeImage);
+
   container.innerHTML = '';
+
+  if (!hasUploadedEvidence) {
+    return;
+  }
 
   const apiKey = process.env.NEXT_PUBLIC_GEOAPIFY_API_KEY;
   if (!apiKey) {
@@ -805,7 +813,7 @@ const getBlockValidationMessage = (block: BlockKey) => {
   return () => {
     container.innerHTML = '';
   };
-}, [step]);
+}, [step, blocks]);
 
 const loadImageAsDataUrl = (src: string): Promise<string> =>
   new Promise((resolve, reject) => {
@@ -1571,18 +1579,27 @@ const loadImageAsDataUrl = (src: string): Promise<string> =>
                 </div>
               </div>
 
-              <div className="space-y-2">
+             <div className="space-y-2">
   <Label>Search place</Label>
-  <div
-    ref={(el) => {
-      autocompleteRefs.current[block] = el;
-    }}
-    className="rounded-xl border border-slate-300 px-3 py-2"
-    style={{ position: 'relative' }}
-  />
-  <p className="text-xs text-slate-500">
-    Search for a place and select it from the suggestions.
-  </p>
+
+  {Boolean(state.problemImage) || Boolean(state.goodPracticeImage) ? (
+    <>
+      <div
+        ref={(el) => {
+          autocompleteRefs.current[block] = el;
+        }}
+        className="rounded-xl border border-slate-300 px-3 py-2"
+        style={{ position: 'relative' }}
+      />
+      <p className="text-xs text-slate-500">
+        Search for a place and select it from the suggestions.
+      </p>
+    </>
+  ) : (
+    <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-500">
+      Upload at least one image to enable place search.
+    </div>
+  )}
 </div>
               <div className="grid md:grid-cols-2 gap-4">
                 <div>

@@ -16,6 +16,11 @@ type MediaPoint = {
   country: string | null;
 };
 
+type LocationOption = {
+  value: string;
+  label: string;
+};
+
 function getCardClass(isActive: boolean) {
   return [
     'rounded-2xl border bg-white p-4 shadow-sm transition cursor-pointer',
@@ -25,6 +30,26 @@ function getCardClass(isActive: boolean) {
   ].join(' ');
 }
 
+function normalizeText(value: string | null | undefined) {
+  return value?.trim() || '';
+}
+
+function buildLocationCityValue(point: MediaPoint) {
+  const location = normalizeText(point.location_name);
+  const city = normalizeText(point.city);
+  return `${location}|||${city}`;
+}
+
+function buildLocationCityLabel(point: MediaPoint) {
+  const location = normalizeText(point.location_name);
+  const city = normalizeText(point.city);
+
+  if (location && city) return `${location}, ${city}`;
+  if (location) return location;
+  if (city) return city;
+  return 'Unnamed location';
+}
+
 export default function EvidenceMapWrapper({
   points,
 }: {
@@ -32,7 +57,7 @@ export default function EvidenceMapWrapper({
 }) {
   const [mediaType, setMediaType] = useState('all');
   const [blockName, setBlockName] = useState('all');
-  const [city, setCity] = useState('all');
+  const [locationCity, setLocationCity] = useState('all');
   const [country, setCountry] = useState('all');
   const [fitTrigger, setFitTrigger] = useState(0);
 
@@ -41,41 +66,66 @@ export default function EvidenceMapWrapper({
   }, [points]);
 
   const countryOptions = useMemo(() => {
-    return Array.from(new Set(points.map((p) => p.country).filter(Boolean) as string[])).sort();
+    return Array.from(
+      new Set(
+        points
+          .map((p) => normalizeText(p.country))
+          .filter(Boolean)
+      )
+    ).sort((a, b) => a.localeCompare(b));
   }, [points]);
 
-  const cityOptions = useMemo(() => {
+  const locationCityOptions = useMemo<LocationOption[]>(() => {
     const source =
       country === 'all'
         ? points
-        : points.filter((p) => p.country === country);
+        : points.filter((p) => normalizeText(p.country) === country);
 
-    return Array.from(new Set(source.map((p) => p.city).filter(Boolean) as string[])).sort();
+    const optionsMap = new Map<string, string>();
+
+    source.forEach((point) => {
+      const value = buildLocationCityValue(point);
+      const label = buildLocationCityLabel(point);
+
+      if (!optionsMap.has(value)) {
+        optionsMap.set(value, label);
+      }
+    });
+
+    return Array.from(optionsMap.entries())
+      .map(([value, label]) => ({ value, label }))
+      .sort((a, b) => a.label.localeCompare(b.label));
   }, [points, country]);
 
   useEffect(() => {
-    if (city !== 'all' && !cityOptions.includes(city)) {
-      setCity('all');
+    if (
+      locationCity !== 'all' &&
+      !locationCityOptions.some((option) => option.value === locationCity)
+    ) {
+      setLocationCity('all');
     }
-  }, [city, cityOptions]);
+  }, [locationCity, locationCityOptions]);
 
   const filteredPoints = useMemo(() => {
     return points.filter((point) => {
       const typeOk = mediaType === 'all' || point.media_type === mediaType;
       const areaOk = blockName === 'all' || point.block_name === blockName;
-      const countryOk = country === 'all' || point.country === country;
-      const cityOk = city === 'all' || point.city === city;
+      const countryOk = country === 'all' || normalizeText(point.country) === country;
+      const locationCityOk =
+        locationCity === 'all' || buildLocationCityValue(point) === locationCity;
 
-      return typeOk && areaOk && countryOk && cityOk;
+      return typeOk && areaOk && countryOk && locationCityOk;
     });
-  }, [points, mediaType, blockName, country, city]);
+  }, [points, mediaType, blockName, country, locationCity]);
 
   const stats = useMemo(() => {
     const total = filteredPoints.length;
     const problems = filteredPoints.filter((p) => p.media_type === 'problem').length;
     const goodPractices = filteredPoints.filter((p) => p.media_type === 'good_practice').length;
-    const cities = new Set(filteredPoints.map((p) => p.city).filter(Boolean)).size;
-    const countries = new Set(filteredPoints.map((p) => p.country).filter(Boolean)).size;
+    const cities = new Set(filteredPoints.map((p) => normalizeText(p.city)).filter(Boolean)).size;
+    const countries = new Set(
+      filteredPoints.map((p) => normalizeText(p.country)).filter(Boolean)
+    ).size;
 
     return {
       total,
@@ -90,7 +140,7 @@ export default function EvidenceMapWrapper({
     setMediaType('all');
     setBlockName('all');
     setCountry('all');
-    setCity('all');
+    setLocationCity('all');
     setFitTrigger((prev) => prev + 1);
   }
 
@@ -144,15 +194,15 @@ export default function EvidenceMapWrapper({
         </div>
       </div>
 
-      <div className="grid md:grid-cols-5 gap-4">
+      <div className="grid gap-4 md:grid-cols-5">
         <div>
-          <label className="block text-sm font-medium text-slate-700 mb-2">
+          <label className="mb-2 block text-sm font-medium text-slate-700">
             Filter by type
           </label>
           <select
             value={mediaType}
             onChange={(e) => setMediaType(e.target.value)}
-            className="w-full rounded-xl border border-slate-300 px-3 py-2 bg-white"
+            className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2"
           >
             <option value="all">All</option>
             <option value="problem">Problem</option>
@@ -161,13 +211,13 @@ export default function EvidenceMapWrapper({
         </div>
 
         <div>
-          <label className="block text-sm font-medium text-slate-700 mb-2">
+          <label className="mb-2 block text-sm font-medium text-slate-700">
             Filter by area
           </label>
           <select
             value={blockName}
             onChange={(e) => setBlockName(e.target.value)}
-            className="w-full rounded-xl border border-slate-300 px-3 py-2 bg-white"
+            className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2"
           >
             <option value="all">All</option>
             {areaOptions.map((area) => (
@@ -179,13 +229,13 @@ export default function EvidenceMapWrapper({
         </div>
 
         <div>
-          <label className="block text-sm font-medium text-slate-700 mb-2">
+          <label className="mb-2 block text-sm font-medium text-slate-700">
             Filter by country
           </label>
           <select
             value={country}
             onChange={(e) => setCountry(e.target.value)}
-            className="w-full rounded-xl border border-slate-300 px-3 py-2 bg-white"
+            className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2"
           >
             <option value="all">All</option>
             {countryOptions.map((item) => (
@@ -197,18 +247,18 @@ export default function EvidenceMapWrapper({
         </div>
 
         <div>
-          <label className="block text-sm font-medium text-slate-700 mb-2">
-            Filter by city
+          <label className="mb-2 block text-sm font-medium text-slate-700">
+            Filter by location + city
           </label>
           <select
-            value={city}
-            onChange={(e) => setCity(e.target.value)}
-            className="w-full rounded-xl border border-slate-300 px-3 py-2 bg-white"
+            value={locationCity}
+            onChange={(e) => setLocationCity(e.target.value)}
+            className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2"
           >
             <option value="all">All</option>
-            {cityOptions.map((item) => (
-              <option key={item} value={item}>
-                {item}
+            {locationCityOptions.map((item) => (
+              <option key={item.value} value={item.value}>
+                {item.label}
               </option>
             ))}
           </select>
@@ -221,7 +271,7 @@ export default function EvidenceMapWrapper({
         </div>
       </div>
 
-      <div className="flex flex-wrap items-center justify-between gap-4 rounded-xl bg-slate-50 border border-slate-200 px-4 py-3 text-sm text-slate-700">
+      <div className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
         <div className="flex flex-wrap items-center gap-4">
           <span className="font-medium text-slate-800">Legend:</span>
 
@@ -247,7 +297,7 @@ export default function EvidenceMapWrapper({
             onClick={handleFitVisiblePoints}
             className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100"
           >
-            Fit visible points
+            Show visible points on map
           </button>
 
           <button

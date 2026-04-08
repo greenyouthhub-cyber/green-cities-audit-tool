@@ -46,6 +46,16 @@ function formatAreaLabel(area: string) {
     .replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
+function formatLocationCity(locationName: string | null, city: string | null) {
+  const parts = [locationName?.trim(), city?.trim()].filter(Boolean);
+  return parts.length ? parts.join(', ') : 'Unnamed location';
+}
+
+function formatCountry(country: string | null) {
+  const value = country?.trim();
+  return value || null;
+}
+
 function FitBounds({
   points,
   fitTrigger,
@@ -173,98 +183,103 @@ export default function EvidenceMap({
         <FitBounds points={points} fitTrigger={fitTrigger} useMap={useMap} />
 
         <>
-          {points.map((point) => (
-            <Marker
-              key={point.id}
-              position={[point.latitude, point.longitude] as LatLngTuple}
-              icon={getMarkerIcon(point.media_type)!}
-            >
-              <Popup>
-                <div
-                  style={{
-                    width: 250,
-                    fontFamily: 'system-ui, sans-serif',
-                  }}
-                >
-                  <img
-                    src={point.image_url}
-                    alt=""
-                    style={{
-                      width: '100%',
-                      height: 140,
-                      objectFit: 'cover',
-                      borderRadius: '10px',
-                      marginBottom: '10px',
-                    }}
-                  />
+          {points.map((point) => {
+            const locationCity = formatLocationCity(point.location_name, point.city);
+            const country = formatCountry(point.country);
 
+            return (
+              <Marker
+                key={point.id}
+                position={[point.latitude, point.longitude] as LatLngTuple}
+                icon={getMarkerIcon(point.media_type)!}
+              >
+                <Popup>
                   <div
                     style={{
-                      display: 'inline-block',
-                      padding: '4px 10px',
-                      borderRadius: '999px',
-                      fontSize: '12px',
-                      fontWeight: 600,
-                      marginBottom: '10px',
-                      ...getTypeStyles(point.media_type),
+                      width: 250,
+                      fontFamily: 'system-ui, sans-serif',
                     }}
                   >
-                    {getTypeLabel(point.media_type)}
-                  </div>
+                    <img
+                      src={point.image_url}
+                      alt=""
+                      style={{
+                        width: '100%',
+                        height: 140,
+                        objectFit: 'cover',
+                        borderRadius: '10px',
+                        marginBottom: '10px',
+                      }}
+                    />
 
-                  <div
-                    style={{
-                      fontSize: '16px',
-                      fontWeight: 700,
-                      color: '#0f172a',
-                      marginBottom: '6px',
-                      lineHeight: 1.3,
-                    }}
-                  >
-                    {point.location_name || 'Unnamed location'}
-                  </div>
-
-                  {(point.city || point.country) && (
                     <div
                       style={{
-                        fontSize: '13px',
-                        color: '#475569',
-                        marginBottom: '8px',
+                        display: 'inline-block',
+                        padding: '4px 10px',
+                        borderRadius: '999px',
+                        fontSize: '12px',
+                        fontWeight: 600,
+                        marginBottom: '10px',
+                        ...getTypeStyles(point.media_type),
                       }}
                     >
-                      {[point.city, point.country].filter(Boolean).join(', ')}
+                      {getTypeLabel(point.media_type)}
                     </div>
-                  )}
 
-                  <div
-                    style={{
-                      fontSize: '12px',
-                      fontWeight: 600,
-                      color: '#334155',
-                      marginBottom: '4px',
-                      textTransform: 'uppercase',
-                      letterSpacing: '0.04em',
-                    }}
-                  >
-                    Area
-                  </div>
+                    <div
+                      style={{
+                        fontSize: '16px',
+                        fontWeight: 700,
+                        color: '#0f172a',
+                        marginBottom: country ? '4px' : '8px',
+                        lineHeight: 1.3,
+                      }}
+                    >
+                      {locationCity}
+                    </div>
 
-                  <div
-                    style={{
-                      fontSize: '14px',
-                      color: '#0f172a',
-                      background: '#f8fafc',
-                      border: '1px solid #e2e8f0',
-                      borderRadius: '8px',
-                      padding: '8px 10px',
-                    }}
-                  >
-                    {formatAreaLabel(point.block_name)}
+                    {country && (
+                      <div
+                        style={{
+                          fontSize: '13px',
+                          color: '#475569',
+                          marginBottom: '8px',
+                        }}
+                      >
+                        {country}
+                      </div>
+                    )}
+
+                    <div
+                      style={{
+                        fontSize: '12px',
+                        fontWeight: 600,
+                        color: '#334155',
+                        marginBottom: '4px',
+                        textTransform: 'uppercase',
+                        letterSpacing: '0.04em',
+                      }}
+                    >
+                      Area
+                    </div>
+
+                    <div
+                      style={{
+                        fontSize: '14px',
+                        color: '#0f172a',
+                        background: '#f8fafc',
+                        border: '1px solid #e2e8f0',
+                        borderRadius: '8px',
+                        padding: '8px 10px',
+                      }}
+                    >
+                      {formatAreaLabel(point.block_name)}
+                    </div>
                   </div>
-                </div>
-              </Popup>
-            </Marker>
-          ))}
+                </Popup>
+              </Marker>
+            );
+          })}
         </>
       </MapContainer>
     </div>
