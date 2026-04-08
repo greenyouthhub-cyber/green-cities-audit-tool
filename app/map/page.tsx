@@ -1,6 +1,7 @@
 import { supabase } from '@/lib/supabaseClient';
 import EvidenceMapWrapper from '@/components/EvidenceMapWrapper';
 import Image from 'next/image';
+export const dynamic = 'force-dynamic';
 
 type MediaEvidenceRow = {
   id: number;
