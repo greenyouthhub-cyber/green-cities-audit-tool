@@ -990,18 +990,22 @@ const loadImageAsDataUrl = (src: string): Promise<string> =>
   doc.save(`green-cities-summary-${profile.city || 'city'}.pdf`);
 };
       const uploadImage = async (
-    file: File,
-    submissionId: string,
-    block: BlockKey,
-    mediaType: 'problem' | 'good_practice'
-  ) => {
-    const ext = file.name.split('.').pop();
-    const filePath = `${submissionId}/${block}/${mediaType}-${Date.now()}.${ext}`;
-    const { error } = await supabase.storage.from('audit-images').upload(filePath, file);
-    if (error) throw error;
-    const { data } = supabase.storage.from('audit-images').getPublicUrl(filePath);
-    return data.publicUrl;
-  };
+  file: File,
+  submissionId: string,
+  block: BlockKey,
+  mediaType: 'problem' | 'good_practice'
+) => {
+  if (!file.type.startsWith('image/')) {
+    throw new Error('Only image files are allowed.');
+  }
+
+  const ext = file.name.split('.').pop();
+  const filePath = `${submissionId}/${block}/${mediaType}-${Date.now()}.${ext}`;
+  const { error } = await supabase.storage.from('audit-images').upload(filePath, file);
+  if (error) throw error;
+  const { data } = supabase.storage.from('audit-images').getPublicUrl(filePath);
+  return data.publicUrl;
+};
 
   const submitAll = async () => {
     try {
@@ -1501,13 +1505,21 @@ const loadImageAsDataUrl = (src: string): Promise<string> =>
                   Upload a file of an image showing the main problem detected
                 </Label>
                 <Input
-                  key={`${block}-problem-image`}
-                  type="file"
-                  accept="image/*"
-                  onChange={(e) =>
-                    updateBlock(block, { problemImage: e.target.files?.[0] || null })
-                  }
-                />
+  key={`${block}-problem-image`}
+  type="file"
+  accept="image/*"
+  onChange={(e) => {
+    const file = e.target.files?.[0] || null;
+
+    if (file && !file.type.startsWith('image/')) {
+      alert('Only image files are allowed.');
+      e.target.value = '';
+      return;
+    }
+
+    updateBlock(block, { problemImage: file });
+  }}
+/>
                 {state.problemImage && (
                   <div className="mt-2 flex items-center justify-between gap-2">
                     <p className="text-xs text-slate-500 break-all">
@@ -1531,13 +1543,21 @@ const loadImageAsDataUrl = (src: string): Promise<string> =>
                   Upload a file of an image that reflects a good practice or something that works well in your city
                 </Label>
                 <Input
-                  key={`${block}-goodpractice-image`}
-                  type="file"
-                  accept="image/*"
-                  onChange={(e) =>
-                    updateBlock(block, { goodPracticeImage: e.target.files?.[0] || null })
-                  }
-                />
+  key={`${block}-goodpractice-image`}
+  type="file"
+  accept="image/*"
+  onChange={(e) => {
+    const file = e.target.files?.[0] || null;
+
+    if (file && !file.type.startsWith('image/')) {
+      alert('Only image files are allowed.');
+      e.target.value = '';
+      return;
+    }
+
+    updateBlock(block, { goodPracticeImage: file });
+  }}
+/>
                 {state.goodPracticeImage && (
                   <div className="mt-2 flex items-center justify-between gap-2">
                     <p className="text-xs text-slate-500 break-all">
