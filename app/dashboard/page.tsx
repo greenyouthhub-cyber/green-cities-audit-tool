@@ -448,25 +448,15 @@ export default function DashboardPage() {
       <div className="mx-auto max-w-7xl space-y-8">
         <div className="space-y-6">
           <div className="flex justify-center">
-            <div className="flex flex-col items-center justify-center gap-4 sm:flex-row sm:gap-8">
-              <Image
-                src="/logo-greencities.png"
-                alt="GreenYOUth logo"
-                width={260}
-                height={90}
-                className="h-auto w-[180px] object-contain sm:w-[220px] md:w-[260px]"
-                priority
-              />
-              <Image
-                src="/UEuropa.png"
-                alt="European Union logo"
-                width={220}
-                height={90}
-                className="h-auto w-[150px] object-contain sm:w-[190px] md:w-[220px]"
-                priority
-              />
-            </div>
-          </div>
+  <Image
+    src="/Header_GreenYouth.jpeg"
+    alt="GreenYOUth header"
+    width={1600}
+    height={400}
+    className="h-auto w-full max-w-[1200px] rounded-2xl object-contain"
+    priority
+  />
+</div>
 
           <div className="mx-auto max-w-3xl text-center">
             <h1 className="text-5xl font-bold leading-tight text-[#10472f]">
