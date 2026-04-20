@@ -119,7 +119,7 @@ const SCALE_HELP =
   'Scale reference: 1 = Very poor / not available · 3 = acceptable but improvable · 5 = excellent / well developed';
 
 const EXPLANATION_HELP =
-  'Please briefly explain why you gave this score. (1–2 sentences)';
+  'Please briefly explain why you gave this score. (1–2 sentences, optional)';
 
 const VISUAL_EVIDENCE_HELP =
   'Visual Evidence: You can add up to two images related to the subject being evaluated. Remember not to include identifiable faces or personal data.';
@@ -572,7 +572,11 @@ const getBlockValidationMessage = (block: BlockKey) => {
       return 'Please answer the policy question before continuing.';
     }
 
-    if (cfg.policyApplication23 && typeof state.policyApplication !== 'number') {
+    if (
+      cfg.policyApplication23 &&
+      state.policyAwareness === 'Yes' &&
+      typeof state.policyApplication !== 'number'
+    ) {
       return 'Please rate the policy application question before continuing.';
     }
   }
@@ -719,7 +723,11 @@ const getBlockValidationMessage = (block: BlockKey) => {
   if (isOlder) {
     if (cfg.policy23 && !state.policyAwareness) return false;
 
-    if (cfg.policyApplication23 && typeof state.policyApplication !== 'number') {
+    if (
+      cfg.policyApplication23 &&
+      state.policyAwareness === 'Yes' &&
+      typeof state.policyApplication !== 'number'
+    ) {
       return false;
     }
   }
@@ -732,6 +740,13 @@ const getBlockValidationMessage = (block: BlockKey) => {
       ...prev,
       [block]: { ...prev[block], ...patch },
     }));
+  };
+
+  const handlePolicyAwarenessChange = (block: BlockKey, value: string) => {
+    updateBlock(block, {
+      policyAwareness: value,
+      policyApplication: value === 'Yes' ? blocks[block].policyApplication : null,
+    });
   };
 
   const removeImageForBlock = (
@@ -1460,7 +1475,7 @@ const loadImageAsDataUrl = (src: string): Promise<string> =>
                       type="radio"
                       name={`${block}-policy`}
                       checked={state.policyAwareness === option}
-                      onChange={() => updateBlock(block, { policyAwareness: option })}
+                      onChange={() => handlePolicyAwarenessChange(block, option)}
                     />
                     {option}
                   </label>
@@ -1469,7 +1484,7 @@ const loadImageAsDataUrl = (src: string): Promise<string> =>
             </div>
           )}
 
-          {isOlder && cfg.policyApplication23 && (
+          {isOlder && cfg.policyApplication23 && state.policyAwareness === 'Yes' && (
             <div className="rounded-2xl border p-4 space-y-3">
               <Label>{cfg.policyApplication23} *</Label>
               <p className="text-sm text-slate-500">
@@ -1692,40 +1707,19 @@ const loadImageAsDataUrl = (src: string): Promise<string> =>
   return (
     <main className="min-h-screen p-4 md:p-8">
       <div className="max-w-5xl mx-auto space-y-6">
-        <div className="rounded-3xl bg-[#10472f] text-white p-6">
-          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-6">
-            <div>
-              <h1 className="text-2xl md:text-3xl font-bold">Green Cities Audit Tool</h1>
-              <p className="text-white/80 mt-2">
-                Its intention is that you can analyse your city with a critical eye and realise
-                what works well and what needs improvement in areas such as mobility, public
-                spaces, waste, energy or pollution.
-              </p>
-            </div>
-
-            <div className="flex items-center gap-4 md:gap-6 self-start md:self-center">
-              <div className="bg-white rounded-2xl p-4">
-                <Image
-                  src="/logo-greencities.png"
-                  alt="Green Cities logo"
-                  width={400}
-                  height={140}
-                  className="object-contain"
-                />
-              </div>
-              <div className="bg-white rounded-2xl p-4">
-                <Image
-                  src="/UEuropa.png"
-                  alt="UEuropa logo"
-                  width={300}
-                  height={150}
-                  className="object-contain"
-                />
-              </div>
-            </div>
+        <div className="rounded-3xl overflow-hidden border bg-white">
+          <div className="relative aspect-[16/4] w-full min-h-[110px] sm:min-h-[140px] md:min-h-[180px]">
+            <Image
+              src="/Header_GreenYouth.jpeg"
+              alt="GreenYOUth header"
+              fill
+              priority
+              sizes="(max-width: 768px) 100vw, 1280px"
+              className="object-cover object-center"
+            />
           </div>
 
-          <div className="mt-6">
+          <div className="p-4 md:p-6">
             <Progress value={progress} />
           </div>
         </div>
@@ -1737,12 +1731,20 @@ const loadImageAsDataUrl = (src: string): Promise<string> =>
               <CardDescription>
                 When you complete the questionnaire, your answers will be used to get an
                 overview of your city&apos;s level of sustainability and to identify real priorities
-                for improvement. The ideas and proposals you contribute will be used to develop a
-                roadmap with suggested actions that could contribute to moving towards a greener,
-                more accessible and people-centred city.
+                for improvement.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
+              <p className="text-sm text-slate-600">
+                Its intention is that you can analyse your city with a critical eye and realise
+                what works well and what needs improvement in areas such as mobility, public
+                spaces, waste, energy or pollution.
+              </p>
+              <p className="text-sm text-slate-600">
+                The ideas and proposals you contribute will be used to develop a roadmap with
+                suggested actions that could contribute to moving towards a greener, more
+                accessible and people-centred city.
+              </p>
               <p className="text-sm text-slate-600">
                 In this way, the information from the questionnaire is collected and transformed
                 into organized proposals for improvement for the city.
@@ -1798,8 +1800,7 @@ const loadImageAsDataUrl = (src: string): Promise<string> =>
         {step === 'profile' && (
           <Card>
             <CardHeader>
-              <CardTitle>Section 3</CardTitle>
-              <CardDescription>
+                            <CardDescription>
                 Let&apos;s get started. Here we just want to know a little about you and your
                 relationship with the city. This part helps us understand your experience in the
                 city.
