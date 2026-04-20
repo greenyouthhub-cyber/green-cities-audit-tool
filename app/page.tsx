@@ -1727,7 +1727,7 @@ const loadImageAsDataUrl = (src: string): Promise<string> =>
         {step === 'home' && (
           <Card>
             <CardHeader>
-              <CardTitle>Welcome</CardTitle>
+              <CardTitle>Green Cities Audit Tool</CardTitle>
               <CardDescription>
                 When you complete the questionnaire, your answers will be used to get an
                 overview of your city&apos;s level of sustainability and to identify real priorities
